@@ -151,6 +151,7 @@ async function runSync(reason = 'manual') {
     const remote = await client.listTodos(cal.href);
     store.upsertMany(remote);
     store.markSynced();
+    console.log(`[sync] ${reason} 完成，拉到 ${remote.length} 条，待传队列剩 ${store.data.pending.length}`);
 
     return { ok: true, pulled: remote.length };
   } catch (e) {
@@ -164,6 +165,25 @@ async function runSync(reason = 'manual') {
 }
 
 /** 本地改动：先写缓存保证界面立刻响应，再尽力推服务器 */
+/**
+ * 新加一条任务后补一次全量同步。
+ *
+ * 加任务本身已经会立刻 PUT 上去了，但那只解决了"我加的那条上去了"。
+ * 手机上刚改的、别的设备刚加的、服务器上被别的客户端删掉的，
+ * 都要等下一个同步周期才看得到。这里在添加动作之后补拉一次，
+ * 侧边栏计数、列表分组、今天清单立刻就是最新的。
+ *
+ * 做了 1.2 秒去抖：连续快速添加五条只触发一次全量拉取，不把服务器打爆。
+ */
+let addSyncTimer = null;
+function scheduleSyncSoon() {
+  if (addSyncTimer) clearTimeout(addSyncTimer);
+  addSyncTimer = setTimeout(() => {
+    addSyncTimer = null;
+    runSync('auto');
+  }, 1200);
+}
+
 async function pushOrQueue(op, clientFn) {
   try {
     const client = makeClient();
@@ -375,6 +395,7 @@ function createTray() {
 
 function quitApp() {
   isQuitting = true;
+  if (addSyncTimer) clearTimeout(addSyncTimer);
   globalShortcut.unregisterAll();
   app.quit();
 }
@@ -422,13 +443,18 @@ function registerIpc() {
 
   ipcMain.handle('task:save', async (_e, todo) => {
     const t = Object.assign({}, todo);
+    const isNew = !t.uid;
     if (!t.uid) t.uid = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}@taskslite`;
     const calHref = store.data.calendarHref;
-    return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
+    const r = await pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
       const href = calHref || (await ensureCalendar(client)).href;
-      const r = await client.putTodoResilient(href, t, t.etag || null);
-      return Object.assign({}, t, { href: r.href, etag: r.etag });
+      const r2 = await client.putTodoResilient(href, t, t.etag || null);
+      return Object.assign({}, t, { href: r2.href, etag: r2.etag });
     });
+    // 新加一条之后补一次全量同步：手机上刚改的、别的设备刚加的，
+    // 立刻反映到本地侧边栏和计数里，不用等下一个同步周期。
+    if (isNew && r && r.ok && !r.queued) scheduleSyncSoon();
+    return r;
   });
 
   /** 移进回收站：本地留档，服务器上真删，误删了能原样恢复 */
@@ -677,7 +703,7 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.3.0',
+            message: 'Tasks Lite 1.3.1',
             detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
                     + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
                     + `全局快捷键 ${GLOBAL_TOGGLE}`,
