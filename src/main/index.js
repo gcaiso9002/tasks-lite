@@ -6,7 +6,8 @@ const {
 const path = require('path');
 const crypto = require('crypto');
 
-const { CaldavClient } = require('./caldav');
+const { CaldavClient, toLocalInput } = require('./caldav');
+const { nextOccurrence, seriesUid } = require('./rrule');
 const { Store } = require('./store');
 const { Config } = require('./config');
 
@@ -124,18 +125,19 @@ async function runSync(reason = 'manual') {
     for (const op of store.data.pending.slice()) {
       try {
         if (op.op === 'put') {
-          const r = await client.putTodo(cal.href, op.todo, op.baseEtag);
+          const r = await client.putTodoResilient(cal.href, op.todo, op.baseEtag);
           store.upsert(Object.assign({}, op.todo, { href: r.href, etag: r.etag }));
         } else if (op.op === 'delete') {
-          await client.deleteTodo(client.absolute(op.href), op.etag);
+          await client.deleteTodoResilient(op.href, op.etag);
           store.remove(op.uid);
         }
         const i = store.data.pending.indexOf(op);
         if (i >= 0) store.data.pending.splice(i, 1);
         store.save();
       } catch (e) {
-        // 409 说明服务端版本更新了，放弃这次推送，等下次 pull 覆盖
-        if (e.status === 409) {
+        // 409/412 说明服务端版本更新了，放弃这次推送，等下面第 2 步 pull 覆盖。
+        // （412 正常已经被 putTodoResilient 重试掉了，走到这里是连续冲突。）
+        if (e.status === 409 || e.status === 412) {
           const i = store.data.pending.indexOf(op);
           if (i >= 0) store.data.pending.splice(i, 1);
           store.save();
@@ -424,7 +426,7 @@ function registerIpc() {
     const calHref = store.data.calendarHref;
     return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
       const href = calHref || (await ensureCalendar(client)).href;
-      const r = await client.putTodo(href, t, t.etag || null);
+      const r = await client.putTodoResilient(href, t, t.etag || null);
       return Object.assign({}, t, { href: r.href, etag: r.etag });
     });
   });
@@ -440,14 +442,14 @@ function registerIpc() {
       store.upsert(c);
       await pushOrQueue({ op: 'put', todo: c, baseEtag: c.etag || null }, async (client) => {
         const href = store.data.calendarHref || (await ensureCalendar(client)).href;
-        const r = await client.putTodo(href, c, c.etag || null);
+        const r = await client.putTodoResilient(href, c, c.etag || null);
         return Object.assign({}, c, { href: r.href, etag: r.etag });
       });
     }
 
     if (t.href) {
       await pushOrQueue({ op: 'delete', uid, href: t.href, etag: t.etag || null }, async (client) => {
-        await client.deleteTodo(client.absolute(t.href), t.etag || null);
+        await client.deleteTodoResilient(t.href, t.etag || null);
         return { uid };
       });
     }
@@ -463,7 +465,7 @@ function registerIpc() {
     if (!t) return { ok: true };
     await pushOrQueue({ op: 'put', todo: t, baseEtag: null }, async (client) => {
       const href = store.data.calendarHref || (await ensureCalendar(client)).href;
-      const r = await client.putTodo(href, t, null);
+      const r = await client.putTodoResilient(href, t, null);
       return Object.assign({}, t, { href: r.href, etag: r.etag });
     });
     broadcast();
@@ -538,7 +540,7 @@ function registerIpc() {
     return out;
   });
 
-  ipcMain.handle('task:toggle', async (_e, uid, completed) => {
+    ipcMain.handle('task:toggle', async (_e, uid, completed) => {
     const t = store.get(uid);
     if (!t) return { ok: false };
     t.completed = !!completed;
@@ -547,11 +549,84 @@ function registerIpc() {
     if (completed && Notification.isSupported()) {
       new Notification({ title: '任务完成', body: t.title }).show();
     }
+    let rolled = null;
+    if (completed) rolled = await rolloverRecurring(t);
+    const r = await pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
+      const r2 = await client.putTodoResilient(store.data.calendarHref, t, t.etag || null);
+      return Object.assign({}, t, { href: r2.href, etag: r2.etag });
+    });
+    return Object.assign({}, r, { rolled });
+  });
+
+  /** 「加入 / 移出今天」——列表里点一下就生效，不用开编辑区 */
+  ipcMain.handle('task:myday', async (_e, uid, on) => {
+    const t = store.get(uid);
+    if (!t) return { ok: false };
+    t.myDay = on ? todayYmd() : '';
+    store.upsert(t);
+    broadcast();
     return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
-      const r = await client.putTodo(store.data.calendarHref, t, t.etag || null);
+      const r = await client.putTodoResilient(store.data.calendarHref, t, t.etag || null);
       return Object.assign({}, t, { href: r.href, etag: r.etag });
     });
   });
+}
+
+/**
+ * 循环任务自动滚动：勾完成后按 RRULE 生成下一次。
+ * 老任务保持已完成（历史留档），新任务继承标题/优先级/标签/清单/循环规则。
+ * UID 用系列号而不是随机生成 —— 同一条反复滚动既不会撞车，
+ * 也不会因为"完成两次"而凭空多出两条。
+ */
+async function rolloverRecurring(t) {
+  if (!t.rrule) return null;
+  const base = t.due || todayYmd();
+  const next = nextOccurrence(t.rrule, base);
+  if (!next) return null;
+
+  const uid = seriesUid(t.uid, next);
+  if (store.get(uid)) return null; // 这一期的下一期已经存在，别重复生成
+
+  const baseDate = new Date(`${base}T00:00:00`);
+  const nextDate = new Date(`${next}T00:00:00`);
+  const shiftDays = Math.round((nextDate - baseDate) / 86400000);
+
+  // 提醒时间跟着顺延同样的天数，保持"每天 8 点"这类习惯
+  let remindAt = '';
+  if (t.remindAt) {
+    const r = new Date(t.remindAt.length <= 10 ? `${t.remindAt}T09:00` : t.remindAt);
+    if (!Number.isNaN(r.getTime())) {
+      r.setDate(r.getDate() + shiftDays);
+      remindAt = toLocalInput(r);
+    }
+  }
+
+  const nextTodo = Object.assign({}, t, {
+    uid,
+    href: '',
+    etag: '',
+    completed: false,
+    due: next,
+    remindAt,
+    myDay: '',                       // 新的一条不进今天的清单
+    steps: [],                       // 上一步做完了，新的一轮重新开始
+    createdFrom: t.uid,
+  });
+  store.upsert(nextTodo);
+  await pushOrQueue({ op: 'put', todo: nextTodo, baseEtag: null }, async (client) => {
+    const href = store.data.calendarHref || (await ensureCalendar(client)).href;
+    const r = await client.putTodoResilient(href, nextTodo, null);
+    return Object.assign({}, nextTodo, { href: r.href, etag: r.etag });
+  });
+  console.log(`[recurrence] ${t.title} → 下一期 ${next}（${uid}）`);
+  broadcast();
+  return nextTodo;
+}
+
+function todayYmd() {
+  const d = new Date();
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 // ================================================================ 定时同步
@@ -602,7 +677,7 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.2.0',
+            message: 'Tasks Lite 1.3.0',
             detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
                     + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
                     + `全局快捷键 ${GLOBAL_TOGGLE}`,

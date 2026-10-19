@@ -18,11 +18,14 @@
   </header>
 
   <div class="app">
-    <!-- 侧边栏：列表 / 标签 / 回收站 -->
+    <!-- 侧边栏：专注视图 / 列表 / 标签 / 回收站 -->
     <aside class="sidebar">
       <div class="side-sec">
-        <div class="side-head">列表</div>
         <div id="listNav" class="side-list"></div>
+      </div>
+      <div class="side-sec">
+        <div class="side-head">列表</div>
+        <div id="listBox" class="side-list"></div>
       </div>
       <div class="side-sec">
         <div class="side-head">标签</div>
@@ -38,7 +41,7 @@
 
     <div class="main">
       <section class="composer">
-        <input id="newTitle" class="new-title" type="text" placeholder="添加任务后回车…" />
+        <input id="newTitle" class="new-title" type="text" placeholder="添加任务后回车…（支持 明天 / 下周三 / 3天后 / 下午3点 / #标签 / @清单 / !高）" />
         <select id="newPriority" class="new-priority" title="优先级">
           <option value="0">无优先级</option>
           <option value="1">高</option>
@@ -48,6 +51,8 @@
         <input id="newDue" class="new-due" type="date" title="截止日期" />
         <button id="btnAdd" class="primary">添加</button>
       </section>
+
+      <div id="quickPreview" class="quick-preview" hidden></div>
 
       <nav class="filters">
         <button class="filter active" data-filter="open">未完成</button>
@@ -64,6 +69,7 @@
           <option value="high">高优先级</option>
           <option value="repeat">循环任务</option>
           <option value="remind">有提醒</option>
+          <option value="myday">在今天</option>
           <option value="parent">是父任务</option>
           <option value="sub">是子任务</option>
         </select>
@@ -71,7 +77,21 @@
         <span id="count" class="count"></span>
       </nav>
 
+      <div id="viewHead" class="view-head" hidden>
+        <button id="viewPrev" class="icon-btn">‹</button>
+        <span id="viewTitle" class="view-title"></span>
+        <button id="viewNext" class="icon-btn">›</button>
+        <button id="viewToday" class="ghost tiny">今天</button>
+        <select id="viewMode" class="smart-filter">
+          <option value="month">月</option>
+          <option value="week">周</option>
+        </select>
+        <span class="spacer"></span>
+        <span id="viewCount" class="count"></span>
+      </div>
+
       <main id="list" class="list"></main>
+      <section id="calendar" class="calendar" hidden></section>
 
       <div id="empty" class="empty" hidden>
         <div class="empty-art">✓</div>
@@ -115,6 +135,18 @@
       <span>上级任务</span>
       <select id="edParent"></select>
     </label>
+
+    <label class="switch-row compact">
+      <input id="edMyDay" type="checkbox" />
+      <span>加入「今天」<small>侧边栏置顶的今日清单，完成或点 ☀ 自动移出</small></span>
+    </label>
+
+    <div class="steps-box">
+      <div class="steps-head">步骤 <span id="edStepsCount" class="meta"></span></div>
+      <ul id="edSteps" class="steps"></ul>
+      <input id="edStepNew" class="step-new" type="text" placeholder="加一步，回车确认" />
+    </div>
+
     <datalist id="listOptions"></datalist>
     <textarea id="edNotes" class="ed-notes" rows="4" placeholder="备注…"></textarea>
     <div class="editor-foot">
@@ -213,6 +245,7 @@
 
   <div id="toast" class="toast" hidden></div>
 
+  <script src="quick-parse.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

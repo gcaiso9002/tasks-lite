@@ -5,13 +5,18 @@ let filter = 'open';          // open | today | overdue | done | all
 let smartFilter = '';         // '' 表示不额外筛
 let listFilter = '';          // '' 表示不按列表筛
 let tagFilter = '';
-let view = 'tasks';           // tasks | trash
+let view = 'tasks';           // tasks | myday | quadrant | calendar | trash
+let dayFilter = '';           // 日历里点某天时，列表只显示这一天
+let calCursor = new Date();   // 日历当前月份
+let calMode = 'month';        // month | week
 let keyword = '';
 let editingUid = null;
+let editingSteps = [];        // 编辑区里正在改的步骤副本
 let toastTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const NO_LIST = '未分类';
+const WEEK_HEAD = ['一', '二', '三', '四', '五', '六', '日'];
 
 // ================================================================ 工具
 
@@ -44,6 +49,15 @@ function listNameOf(t) {
 function shortText(s, n) {
   const str = String(s || '');
   return str.length > n ? str.slice(0, n - 1) + '…' : str;
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function stepsDone(t) {
+  const s = t.steps || [];
+  return s.filter((x) => x.done).length;
 }
 
 // ================================================================ 主题
@@ -128,29 +142,37 @@ const SMART = {
   high: (t) => !t.completed && Number(t.priority) === 1,
   repeat: (t) => !t.completed && !!t.rrule,
   remind: (t) => !t.completed && !!t.remindAt,
+  myday: (t) => !t.completed && !!t.myDay,
   parent: (t) => state.tasks.some((x) => x.parentUid === t.uid),
   sub: (t) => !t.completed && !!t.parentUid,
 };
+
+/** 侧边栏/筛选条之外的条件，与具体视图无关 */
+function passCommon(t) {
+  if (smartFilter && SMART[smartFilter] && !SMART[smartFilter](t)) return false;
+  if (listFilter && listNameOf(t) !== listFilter) return false;
+  if (tagFilter && !(t.tags || []).includes(tagFilter)) return false;
+  if (dayFilter && t.due !== dayFilter) return false;
+  if (keyword) {
+    const k = keyword.toLowerCase();
+    if (!((t.title || '').toLowerCase().includes(k) || (t.notes || '').toLowerCase().includes(k))) return false;
+  }
+  return true;
+}
 
 function visibleTasks() {
   const today = todayStr();
   let list = state.tasks.slice();
 
-  if (filter === 'open') list = list.filter((t) => !t.completed);
+  if (view === 'myday') {
+    // 「今天」= 手动加进来的未完成任务，一直留着直到做完或手动移出
+    list = list.filter((t) => !t.completed && t.myDay);
+  } else if (filter === 'open') list = list.filter((t) => !t.completed);
   else if (filter === 'done') list = list.filter((t) => t.completed);
   else if (filter === 'today') list = list.filter((t) => !t.completed && t.due && t.due <= today);
   else if (filter === 'overdue') list = list.filter((t) => !t.completed && t.due && t.due < today);
 
-  if (smartFilter && SMART[smartFilter]) list = list.filter(SMART[smartFilter]);
-  if (listFilter) list = list.filter((t) => listNameOf(t) === listFilter);
-  if (tagFilter) list = list.filter((t) => (t.tags || []).includes(tagFilter));
-
-  if (keyword) {
-    const k = keyword.toLowerCase();
-    list = list.filter(
-      (t) => (t.title || '').toLowerCase().includes(k) || (t.notes || '').toLowerCase().includes(k)
-    );
-  }
+  list = list.filter(passCommon);
 
   // 未完成在前；组内按优先级、再按截止日、最后按标题
   list.sort((a, b) => {
@@ -168,66 +190,7 @@ function visibleTasks() {
   return list;
 }
 
-// ================================================================ 渲染
-
-function render() {
-  const byUid = new Map(state.tasks.map((t) => [t.uid, t]));
-  const trashMode = view === 'trash';
-
-  document.querySelector('.main').classList.toggle('trash-mode', trashMode);
-  $('btnTrash').classList.toggle('active', trashMode);
-  $('btnTrashEmpty').hidden = !(trashMode && state.trash.length);
-
-  const list = $('list');
-  list.innerHTML = '';
-
-  if (trashMode) {
-    renderTrash(list);
-    return;
-  }
-
-  const items = visibleTasks();
-  const today = todayStr();
-  $('empty').hidden = items.length > 0;
-  $('count').textContent = `${state.tasks.filter((t) => !t.completed).length} 项未完成 / 共 ${state.tasks.length} 项`;
-
-  for (const t of items) {
-    const depth = depthOf(t, byUid);
-    const row = document.createElement('div');
-    row.className = 'item' + (t.completed ? ' done' : '') + (editingUid === t.uid ? ' editing' : '')
-      + (depth ? ' sub' : '');
-    row.dataset.uid = t.uid;
-    if (depth) row.style.paddingLeft = `${12 + depth * 20}px`;
-
-    const badges = [];
-    const pl = priorityLabel(t.priority);
-    if (pl) badges.push(`<span class="badge p${t.priority}">${pl}优先级</span>`);
-    if (t.due) {
-      const cls = t.completed ? 'due' : t.due < today ? 'overdue' : t.due === today ? 'today' : 'due';
-      const label = t.due === today ? '今天' : t.due;
-      badges.push(`<span class="badge ${cls}">📅 ${label}</span>`);
-    }
-    if (t.rrule) badges.push(`<span class="badge repeat">🔁 ${repeatLabel(t.rrule)}</span>`);
-    if (t.remindAt) badges.push(`<span class="badge remind">⏰ ${t.remindAt.replace('T', ' ')}</span>`);
-    for (const tag of t.tags || []) badges.push(`<span class="badge tag">#${escapeHtml(tag)}</span>`);
-    if (t.notes) badges.push('<span class="badge note">有备注</span>');
-    if (t.etag === '' && t.href) badges.push('<span class="badge note">待上传</span>');
-
-    row.innerHTML = `
-      <div class="check" data-act="toggle">✓</div>
-      <div class="body">
-        <div class="title"></div>
-        ${badges.length ? `<div class="badges">${badges.join('')}</div>` : ''}
-      </div>
-      <button class="del" data-act="del" title="移到回收站">✕</button>`;
-
-    row.querySelector('.title').textContent = t.title || '(无标题)';
-    list.appendChild(row);
-  }
-
-  renderSidebar();
-  renderSyncState();
-}
+// ================================================================ 单行任务
 
 function repeatLabel(rrule) {
   const s = String(rrule || '').toUpperCase();
@@ -239,8 +202,83 @@ function repeatLabel(rrule) {
   return '循环';
 }
 
-function escapeHtml(s) {
-  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+function buildRow(t, byUid, extraClass) {
+  const depth = depthOf(t, byUid);
+  const row = document.createElement('div');
+  row.className = 'item' + (t.completed ? ' done' : '') + (editingUid === t.uid ? ' editing' : '')
+    + (depth ? ' sub' : '') + (extraClass ? ' ' + extraClass : '');
+  row.dataset.uid = t.uid;
+  if (depth) row.style.paddingLeft = `${12 + depth * 20}px`;
+
+  const today = todayStr();
+  const badges = [];
+  const pl = priorityLabel(t.priority);
+  if (pl) badges.push(`<span class="badge p${t.priority}">${pl}优先级</span>`);
+  if (t.due) {
+    const cls = t.completed ? 'due' : t.due < today ? 'overdue' : t.due === today ? 'today' : 'due';
+    const label = t.due === today ? '今天' : t.due;
+    badges.push(`<span class="badge ${cls}">📅 ${label}</span>`);
+  }
+  if (t.rrule) badges.push(`<span class="badge repeat">🔁 ${repeatLabel(t.rrule)}</span>`);
+  if (t.remindAt) badges.push(`<span class="badge remind">⏰ ${t.remindAt.replace('T', ' ')}</span>`);
+  for (const tag of t.tags || []) badges.push(`<span class="badge tag">#${escapeHtml(tag)}</span>`);
+  if ((t.steps || []).length) {
+    badges.push(`<span class="badge step">☑ ${stepsDone(t)}/${t.steps.length}</span>`);
+  }
+  if (t.notes) badges.push('<span class="badge note">有备注</span>');
+  if (t.etag === '' && t.href) badges.push('<span class="badge note">待上传</span>');
+
+  row.innerHTML = `
+    <div class="check" data-act="toggle">✓</div>
+    <div class="body">
+      <div class="title"></div>
+      ${badges.length ? `<div class="badges">${badges.join('')}</div>` : ''}
+    </div>
+    <button class="myday-btn${t.myDay && !t.completed ? ' on' : ''}" data-act="myday" title="${t.myDay ? '从今天移出' : '加入今天'}">☀</button>
+    <button class="del" data-act="del" title="移到回收站">✕</button>`;
+
+  row.querySelector('.title').textContent = t.title || '(无标题)';
+  return row;
+}
+
+// ================================================================ 渲染
+
+function render() {
+  const byUid = new Map(state.tasks.map((t) => [t.uid, t]));
+  const main = document.querySelector('.main');
+  main.classList.toggle('trash-mode', view === 'trash');
+  main.classList.toggle('cal-mode', view === 'calendar');
+  main.classList.toggle('quad-mode', view === 'quadrant');
+
+  // 日历/四象限/回收站有自己的"页头"或不需要筛选条，别把两套控件同时摆出来
+  $('viewHead').hidden = view !== 'calendar';
+  main.querySelector('.filters').hidden = view === 'calendar' || view === 'quadrant' || view === 'trash';
+  main.querySelector('.composer').hidden = view === 'calendar' || view === 'quadrant' || view === 'trash';
+  $('quickPreview').hidden = true;
+  $('empty').hidden = true;
+
+  $('btnTrash').classList.toggle('active', view === 'trash');
+  $('btnTrashEmpty').hidden = !(view === 'trash' && state.trash.length);
+
+  const list = $('list');
+  const cal = $('calendar');
+  list.innerHTML = '';
+  cal.innerHTML = '';
+
+  if (view === 'trash') { renderTrash(list); renderSidebar(); renderSyncState(); return; }
+  if (view === 'calendar') return renderCalendar(cal);
+  if (view === 'quadrant') return renderQuadrant(list, byUid);
+
+  const items = visibleTasks();
+  $('empty').hidden = items.length > 0;
+  $('count').textContent = view === 'myday'
+    ? `${items.length} 项待办`
+    : `${state.tasks.filter((t) => !t.completed).length} 项未完成 / 共 ${state.tasks.length} 项`;
+
+  for (const t of items) list.appendChild(buildRow(t, byUid));
+
+  renderSidebar();
+  renderSyncState();
 }
 
 function renderTrash(list) {
@@ -267,9 +305,186 @@ function renderTrash(list) {
   }
 }
 
+// ---------------- 四象限 ----------------
+
+function quadrants() {
+  const today = todayStr();
+  const open = state.tasks.filter((t) => !t.completed && passCommon(t));
+  const important = (t) => Number(t.priority) === 1;
+  const urgent = (t) => !!t.due && t.due <= today;
+  return [
+    { key: 'q1', name: '重要且紧急', hint: '马上做', items: open.filter((t) => important(t) && urgent(t)) },
+    { key: 'q2', name: '重要不紧急', hint: '排进计划', items: open.filter((t) => important(t) && !urgent(t)) },
+    { key: 'q3', name: '紧急不重要', hint: '尽快做或找人', items: open.filter((t) => !important(t) && urgent(t)) },
+    { key: 'q4', name: '不重要不紧急', hint: '有空再说', items: open.filter((t) => !important(t) && !urgent(t)) },
+  ];
+}
+
+function renderQuadrant(list, byUid) {
+  const qs = quadrants();
+  $('count').textContent = `未完成 ${qs.reduce((n, q) => n + q.items.length, 0)} 项`;
+  $('empty').hidden = qs.some((q) => q.items.length);
+  qs.forEach((q, i) => {
+    const box = document.createElement('section');
+    box.className = 'quad';
+    const head = document.createElement('div');
+    head.className = 'quad-head';
+    head.innerHTML = `<span class="quad-name"></span><span class="quad-hint"></span><span class="pill"></span>`;
+    head.querySelector('.quad-name').textContent = `${i + 1}. ${q.name}`;
+    head.querySelector('.quad-hint').textContent = q.hint;
+    head.querySelector('.pill').textContent = String(q.items.length);
+    box.appendChild(head);
+    if (!q.items.length) {
+      const empty = document.createElement('div');
+      empty.className = 'quad-empty';
+      empty.textContent = '空';
+      box.appendChild(empty);
+    }
+    for (const t of q.items) box.appendChild(buildRow(t, byUid, 'flat'));
+    list.appendChild(box);
+  });
+  renderSidebar();
+  renderSyncState();
+}
+
+// ---------------- 日历 ----------------
+
+function tasksOnDay(day) {
+  return state.tasks
+    .filter((t) => t.due === day)
+    .sort((a, b) => {
+      if (!!a.completed !== !!b.completed) return a.completed ? 1 : -1;
+      return (a.title || '').localeCompare(b.title || '', 'zh');
+    });
+}
+
+function renderCalendar(cal) {
+  const byUid = new Map(state.tasks.map((t) => [t.uid, t]));
+  const y = calCursor.getFullYear();
+  const m = calCursor.getMonth();
+  $('viewMode').value = calMode;
+  const monthCount = state.tasks.filter((t) => t.due && t.due.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).length;
+  $('viewCount').textContent = `本月 ${monthCount} 项有截止日`;
+
+  if (calMode === 'week') {
+    $('viewTitle').textContent = weekRangeText(calCursor);
+    const grid = document.createElement('div');
+    grid.className = 'cal-week';
+    const start = mondayOf(calCursor);
+    for (let i = 0; i < 7; i++) {
+      const d = new Date(start);
+      d.setDate(start.getDate() + i);
+      const day = ymdOf(d);
+      const col = document.createElement('div');
+      col.className = 'cal-col' + (day === todayStr() ? ' today' : '');
+      const h = document.createElement('div');
+      h.className = 'cal-col-head';
+      h.textContent = `${m + 1}/${d.getDate()} 周${WEEK_HEAD[i]}`;
+      col.appendChild(h);
+      for (const t of tasksOnDay(day)) col.appendChild(buildRow(t, byUid, 'mini'));
+      if (!tasksOnDay(day).length) {
+        const e = document.createElement('div');
+        e.className = 'cal-empty';
+        e.textContent = '无';
+        col.appendChild(e);
+      }
+      grid.appendChild(col);
+    }
+    cal.appendChild(grid);
+  } else {
+    $('viewTitle').textContent = `${y} 年 ${m + 1} 月`;
+    const grid = document.createElement('div');
+    grid.className = 'cal-grid';
+    for (const w of WEEK_HEAD) {
+      const h = document.createElement('div');
+      h.className = 'cal-head';
+      h.textContent = `周${w}`;
+      grid.appendChild(h);
+    }
+    const first = new Date(y, m, 1);
+    const lead = (first.getDay() + 6) % 7;   // 周一为一周之始
+    const daysInMonth = new Date(y, m + 1, 0).getDate();
+    const cells = Math.ceil((lead + daysInMonth) / 7) * 7;
+    for (let i = 0; i < cells; i++) {
+      const d = new Date(y, m, i - lead + 1);
+      const day = ymdOf(d);
+      const cell = document.createElement('div');
+      cell.className = 'cal-cell';
+      if (d.getMonth() !== m) cell.classList.add('out');
+      if (day === todayStr()) cell.classList.add('today');
+      if (dayFilter === day) cell.classList.add('sel');
+      const items = tasksOnDay(day);
+      cell.innerHTML = `<div class="cal-num"></div><div class="cal-items"></div>`;
+      cell.querySelector('.cal-num').textContent = String(d.getDate());
+      const box = cell.querySelector('.cal-items');
+      for (const t of items.slice(0, 3)) {
+        const chip = document.createElement('div');
+        chip.className = 'cal-chip' + (t.completed ? ' done' : '') + (Number(t.priority) === 1 ? ' hi' : '');
+        chip.dataset.uid = t.uid;
+        chip.textContent = shortText(t.title || '(无标题)', 14);
+        box.appendChild(chip);
+      }
+      if (items.length > 3) {
+        const more = document.createElement('div');
+        more.className = 'cal-more';
+        more.textContent = `+${items.length - 3}`;
+        box.appendChild(more);
+      }
+      // 点空白处筛这一天，点任务条开编辑区 —— 用 target 判断，别抢任务条的点击
+      cell.addEventListener('click', (e) => {
+        if (e.target.closest('.cal-chip')) return;
+        dayFilter = dayFilter === day ? '' : day;
+        view = dayFilter ? 'tasks' : 'calendar';
+        filter = 'all';
+        document.querySelectorAll('.filter').forEach((x) => x.classList.remove('active'));
+        render();
+      });
+      grid.appendChild(cell);
+    }
+    cal.appendChild(grid);
+  }
+  renderSidebar();
+  renderSyncState();
+}
+
+function ymdOf(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
+function mondayOf(d) {
+  const x = new Date(d);
+  x.setDate(x.getDate() - ((x.getDay() + 6) % 7));
+  return x;
+}
+
+function weekRangeText(d) {
+  const s = mondayOf(d);
+  const e = new Date(s);
+  e.setDate(s.getDate() + 6);
+  return `${s.getMonth() + 1}/${s.getDate()} – ${e.getMonth() + 1}/${e.getDate()}`;
+}
+
+// ---------------- 侧边栏 ----------------
+
 function renderSidebar() {
-  // 注意 mk() 必须显式接收容器：列表和标签共用它，
-  // 一旦闭包里写死 listNav，标签就会被追加到「列表」那一栏里去
+  // 专注视图：置顶三个入口
+  const nav = $('listNav');
+  nav.innerHTML = '';
+  const mkNav = (label, active, count, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'side-item' + (active ? ' active' : '');
+    b.innerHTML = `<span class="side-label"></span><span class="pill"></span>`;
+    b.querySelector('.side-label').textContent = label;
+    b.querySelector('.pill').textContent = count > 0 ? String(count) : '';
+    b.addEventListener('click', onClick);
+    nav.appendChild(b);
+  };
+  const myDayCount = state.tasks.filter((t) => !t.completed && t.myDay).length;
+  mkNav('☀ 今天', view === 'myday', myDayCount, () => switchView('myday'));
+  mkNav('◧ 四象限', view === 'quadrant', 0, () => switchView('quadrant'));
+  mkNav('▦ 日历', view === 'calendar', 0, () => switchView('calendar'));
+
   const mk = (host, label, active, count, onClick) => {
     const b = document.createElement('button');
     b.className = 'side-item' + (active ? ' active' : '');
@@ -280,20 +495,19 @@ function renderSidebar() {
     host.appendChild(b);
   };
 
-  const listNav = $('listNav');
-  listNav.innerHTML = '';
+  const listBox = $('listBox');
+  listBox.innerHTML = '';
   for (const l of state.lists || []) {
-    mk(listNav, l.name, listFilter === l.name, l.count, () => {
+    mk(listBox, l.name, listFilter === l.name, l.count, () => {
       listFilter = listFilter === l.name ? '' : l.name;
-      view = 'tasks';
-      render();
+      switchView('tasks');
     });
   }
   if (!(state.lists || []).length) {
     const hint = document.createElement('div');
     hint.className = 'side-hint';
     hint.textContent = '还没有列表；在任务里填「列表」就会出现在这里';
-    listNav.appendChild(hint);
+    listBox.appendChild(hint);
   }
 
   const tagNav = $('tagNav');
@@ -301,7 +515,6 @@ function renderSidebar() {
   for (const t of state.tags || []) {
     mk(tagNav, `#${t.name}`, tagFilter === t.name, t.count, () => {
       tagFilter = tagFilter === t.name ? '' : t.name;
-      view = 'tasks';
       render();
     });
   }
@@ -313,6 +526,13 @@ function renderSidebar() {
   }
 
   $('trashCount').textContent = state.trash.length ? String(state.trash.length) : '';
+}
+
+function switchView(next) {
+  view = view === next && next !== 'tasks' ? 'tasks' : next;
+  if (view === 'calendar') calCursor = new Date();
+  if (view !== 'tasks') $('empty').querySelector('.empty-text').textContent = '这里没有任务';
+  render();
 }
 
 function renderSyncState() {
@@ -340,24 +560,56 @@ function renderSyncState() {
 
 // ================================================================ 交互
 
+// ---------------- 快速添加 ----------------
+
+function quickPreviewText(raw) {
+  if (!raw.trim()) return null;
+  const p = parseQuickInput(raw);
+  const bits = [];
+  if (p.due) bits.push(`📅 ${p.due}`);
+  if (p.remindAt) bits.push(`⏰ ${p.remindAt.replace('T', ' ')}`);
+  if (p.rrule) bits.push(`🔁 ${repeatLabel(p.rrule)}`);
+  for (const t of p.tags) bits.push(`#${t}`);
+  if (p.list) bits.push(`@${p.list}`);
+  if (p.priority) bits.push(`${priorityLabel(p.priority)}优先级`);
+  return bits.length ? bits.join('  ') : null;
+}
+
+function updateQuickPreview() {
+  const el = $('quickPreview');
+  const txt = quickPreviewText($('newTitle').value);
+  el.textContent = txt || '';
+  el.hidden = !txt;
+}
+
 function addTask() {
   const input = $('newTitle');
-  const title = input.value.trim();
-  if (!title) return;
+  const raw = input.value.trim();
+  if (!raw) return;
+  const p = parseQuickInput(raw);
+  // 解析不出来修饰就用原句当标题，绝不吞掉用户写的东西
+  const title = p.title || raw;
   input.value = '';
+  $('quickPreview').hidden = true;
   window.api.saveTask({
     title,
-    priority: Number($('newPriority').value) || 0,
-    due: $('newDue').value || null,
+    // 句子里写了优先级/日期就用句子的，否则用输入框旁边的选择器
+    priority: p.priority || Number($('newPriority').value) || 0,
+    due: p.due || $('newDue').value || null,
+    remindAt: p.remindAt || '',
+    rrule: p.rrule || '',
+    tags: p.tags,
+    list: p.list || (listFilter && listFilter !== NO_LIST ? listFilter : ''),
     notes: '',
-    // 侧边栏选中了列表就跟着走，省得每条都去编辑里补
-    list: listFilter && listFilter !== NO_LIST ? listFilter : '',
-    tags: tagFilter ? [tagFilter] : [],
+    steps: [],
   });
 }
 
 $('btnAdd').addEventListener('click', addTask);
 $('newTitle').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTask(); });
+$('newTitle').addEventListener('input', updateQuickPreview);
+
+// ---------------- 列表点击 ----------------
 
 $('list').addEventListener('click', (e) => {
   const row = e.target.closest('.item');
@@ -381,9 +633,25 @@ $('list').addEventListener('click', (e) => {
 
   if (view === 'trash') return;
 
+  if (act === 'myday') {
+    e.stopPropagation();
+    const t = state.tasks.find((x) => x.uid === uid);
+    const on = !(t && t.myDay);
+    window.api.toggleMyDay(uid, on).then(() => toast(on ? '已加入「今天」' : '已移出「今天」'));
+    return;
+  }
+
   if (act === 'toggle') {
     const t = state.tasks.find((x) => x.uid === uid);
-    window.api.toggleTask(uid, !(t && t.completed));
+    const willComplete = !(t && t.completed);
+    // 有步骤没做完时提醒一句，别让人以为整件事都办完了
+    if (willComplete && (t && (t.steps || []).some((s) => !s.done))) {
+      const left = t.steps.filter((s) => !s.done).length;
+      if (!confirm(`还有 ${left} 个步骤没完成，确定标记整条任务完成？`)) return;
+    }
+    window.api.toggleTask(uid, willComplete).then((r) => {
+      if (r && r.rolled) toast(`已生成下一期：${r.rolled.due}`);
+    });
     e.stopPropagation();
     return;
   }
@@ -397,11 +665,56 @@ $('list').addEventListener('click', (e) => {
   openEditor(uid);
 });
 
+// 日历里点任务条也能打开编辑区
+$('calendar').addEventListener('click', (e) => {
+  const chip = e.target.closest('.cal-chip');
+  if (chip) {
+    e.stopPropagation();
+    openEditor(chip.dataset.uid);
+  }
+});
+
 // ---------------- 编辑区 ----------------
 
 const KNOWN_REPEAT = [
   '', 'FREQ=DAILY', 'FREQ=WEEKLY', 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', 'FREQ=MONTHLY', 'FREQ=YEARLY',
 ];
+
+function renderSteps() {
+  const ul = $('edSteps');
+  ul.innerHTML = '';
+  editingSteps.forEach((s, i) => {
+    const li = document.createElement('li');
+    li.className = 'step' + (s.done ? ' done' : '');
+    li.innerHTML = '<span class="step-box" data-i="' + i + '">✓</span><span class="step-text"></span><button class="step-del" data-i="' + i + '">✕</button>';
+    li.querySelector('.step-text').textContent = s.text;
+    ul.appendChild(li);
+  });
+  $('edStepsCount').textContent = editingSteps.length
+    ? `已完成 ${editingSteps.filter((s) => s.done).length}/${editingSteps.length}`
+    : '';
+}
+
+$('edSteps').addEventListener('click', (e) => {
+  const box = e.target.closest('.step-box');
+  const del = e.target.closest('.step-del');
+  if (box) {
+    editingSteps[+box.dataset.i].done = !editingSteps[+box.dataset.i].done;
+    renderSteps();
+  } else if (del) {
+    editingSteps.splice(+del.dataset.i, 1);
+    renderSteps();
+  }
+});
+
+$('edStepNew').addEventListener('keydown', (e) => {
+  if (e.key !== 'Enter') return;
+  const v = e.target.value.trim();
+  if (!v) return;
+  editingSteps.push({ text: v, done: false });
+  e.target.value = '';
+  renderSteps();
+});
 
 function openEditor(uid) {
   const t = state.tasks.find((x) => x.uid === uid);
@@ -414,6 +727,7 @@ function openEditor(uid) {
   $('edRemind').value = t.remindAt || '';
   $('edList').value = t.list || '';
   $('edTags').value = (t.tags || []).join(', ');
+  $('edMyDay').checked = !!t.myDay;
 
   // 不认识的 RRULE 补一条选项，别被下拉框默默改掉
   const rep = $('edRepeat');
@@ -428,7 +742,6 @@ function openEditor(uid) {
   }
   rep.value = rrule || '';
 
-  // 列表候选来自现有任务，避免每条都手打
   const dl = $('listOptions');
   dl.innerHTML = '';
   for (const l of state.lists || []) {
@@ -438,7 +751,6 @@ function openEditor(uid) {
     dl.appendChild(o);
   }
 
-  // 上级任务下拉：排除自己和自己的子孙，防止选出环
   const sel = $('edParent');
   sel.innerHTML = '';
   const none = document.createElement('option');
@@ -455,6 +767,10 @@ function openEditor(uid) {
   }
   sel.value = t.parentUid || '';
 
+  editingSteps = (t.steps || []).map((s) => ({ text: s.text, done: !!s.done }));
+  $('edStepNew').value = '';
+  renderSteps();
+
   $('edMeta').textContent = t.etag === '' ? '尚未上传到服务器' : '已同步到服务器';
   $('editor').hidden = false;
   render();
@@ -463,6 +779,7 @@ function openEditor(uid) {
 
 function closeEditor() {
   editingUid = null;
+  editingSteps = [];
   $('editor').hidden = true;
   render();
 }
@@ -492,6 +809,8 @@ async function saveEditor() {
     list: $('edList').value.trim(),
     tags: $('edTags').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
     parentUid: $('edParent').value || '',
+    myDay: $('edMyDay').checked ? (t.myDay || todayStr()) : '',
+    steps: editingSteps,
   };
   closeEditor();
   const r = await window.api.saveTask(patch);
@@ -501,28 +820,25 @@ async function saveEditor() {
 $('edClose').addEventListener('click', closeEditor);
 $('edSave').addEventListener('click', saveEditor);
 
-// ---------------- 过滤 / 侧边栏 ----------------
+// ---------------- 过滤 / 侧边栏 / 日历 ----------------
 
 document.querySelectorAll('.filter').forEach((b) => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.filter').forEach((x) => x.classList.remove('active'));
     b.classList.add('active');
     filter = b.dataset.filter;
-    view = 'tasks';
+    dayFilter = '';
+    if (view !== 'tasks') view = 'tasks';
     render();
   });
 });
 
 $('filterSmart').addEventListener('change', (e) => {
   smartFilter = e.target.value;
-  view = 'tasks';
   render();
 });
 
-$('btnTrash').addEventListener('click', () => {
-  view = view === 'trash' ? 'tasks' : 'trash';
-  render();
-});
+$('btnTrash').addEventListener('click', () => switchView('trash'));
 
 $('btnTrashEmpty').addEventListener('click', () => {
   if (confirm(`清空回收站里的 ${state.trash.length} 项？不可恢复。`)) {
@@ -531,6 +847,23 @@ $('btnTrashEmpty').addEventListener('click', () => {
 });
 
 $('search').addEventListener('input', (e) => { keyword = e.target.value.trim(); render(); });
+
+$('viewPrev').addEventListener('click', () => {
+  const d = new Date(calCursor);
+  if (calMode === 'month') d.setMonth(d.getMonth() - 1);
+  else d.setDate(d.getDate() - 7);
+  calCursor = d;
+  render();
+});
+$('viewNext').addEventListener('click', () => {
+  const d = new Date(calCursor);
+  if (calMode === 'month') d.setMonth(d.getMonth() + 1);
+  else d.setDate(d.getDate() + 7);
+  calCursor = d;
+  render();
+});
+$('viewToday').addEventListener('click', () => { calCursor = new Date(); render(); });
+$('viewMode').addEventListener('change', (e) => { calMode = e.target.value; render(); });
 
 $('btnSync').addEventListener('click', async () => {
   const r = await window.api.sync();
@@ -665,8 +998,7 @@ $('btnDiag').addEventListener('click', async () => {
   box.className = 'diag-box';
   const r = await window.api.netDiag();
   box.className = 'diag-box ' + (r.ok ? 'ok' : 'err');
-  const lines = (r.lines || []).map((l) => `<div>${escapeHtml(l)}</div>`).join('');
-  box.innerHTML = lines;
+  box.innerHTML = (r.lines || []).map((l) => `<div>${escapeHtml(l)}</div>`).join('');
 });
 
 // ---------------- 快捷键 ----------------
@@ -677,7 +1009,8 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') {
     if (!$('settings').hidden) $('settings').hidden = true;
     else if (!$('editor').hidden) closeEditor();
-    else if (view === 'trash') { view = 'tasks'; render(); }
+    else if (dayFilter) { dayFilter = ''; view = 'calendar'; render(); }
+    else if (view !== 'tasks') switchView('tasks');
   }
 });
 
@@ -697,7 +1030,8 @@ window.api.getState().then(acceptState);
 window.api.onFocusComposer(() => {
   $('settings').hidden = true;
   $('editor').hidden = true;
-  if (view === 'trash') { view = 'tasks'; render(); }
+  if (view === 'trash' || view === 'quadrant' || view === 'calendar') view = 'tasks';
+  render();
   $('newTitle').focus();
 });
 

@@ -52,7 +52,9 @@ class CaldavClient {
           // 只报一个数字的话，用户既不知道是被谁挡的，也不知道该改什么。
           : res.status === 402 || res.status === 407
             ? `${res.status}：请求被中间的代理拦住了（${host}）。到设置里把「连接方式」改成「直连」`
-            : `服务器返回 ${res.status} ${res.statusText}（${host}）`
+            : res.status === 412
+              ? '服务器返回 412：这条任务刚被另一个客户端改过，冲突没能自动合并'
+              : `服务器返回 ${res.status} ${res.statusText}（${host}）`
       );
       err.status = res.status;
       throw err;
@@ -189,6 +191,59 @@ class CaldavClient {
       method: 'DELETE',
       headers: etag ? { 'If-Match': etag } : {},
     });
+  }
+
+  // ------------------------------------------------------- 冲突自愈（412 重试）
+  //
+  // 只要同一个日历上有第二个客户端（手机、另一个窗口、Tasks.org），两边就会
+  // 拿着各自缓存的 ETag 去写同一条任务，后写的那个必然拿到 412。
+  // 单纯把 412 抛给用户是没用的——他什么也做不了，只能干瞪眼。
+  // 这里改成：冲突了就重读一次服务器现状，拿最新 ETag 再写一遍（后写为准）。
+
+  /** 读回服务器上某条任务的最新 ETag；服务器上没有就返回 null（当新建处理） */
+  async freshEtag(calendarHref, uid) {
+    const href = this.absolute(`${calendarHref.replace(/\/$/, '')}/${uid}.ics`);
+    try {
+      const { headers } = await this.request(href, { method: 'GET' });
+      return headers.get('etag') || null;
+    } catch (e) {
+      if (e.status === 404) return null;
+      throw e;
+    }
+  }
+
+  /** PUT，遇 412 自动重读 ETag 再试一次 */
+  async putTodoResilient(calendarHref, todo, etag, tries = 2) {
+    let cur = etag;
+    for (let i = 0; ; i++) {
+      try {
+        return await this.putTodo(calendarHref, todo, cur);
+      } catch (e) {
+        if (e.status !== 412 || i >= tries) throw e;
+        cur = await this.freshEtag(calendarHref, todo.uid);
+      }
+    }
+  }
+
+  /** DELETE，遇 412 重读 ETag 再试；404 视为"服务器上已经没有了"，算成功 */
+  async deleteTodoResilient(href, etag, tries = 2) {
+    let cur = etag;
+    for (let i = 0; ; i++) {
+      try {
+        await this.deleteTodo(this.absolute(href), cur);
+        return { deleted: true };
+      } catch (e) {
+        if (e.status === 404) return { deleted: true, alreadyGone: true };
+        if (e.status !== 412 || i >= tries) throw e;
+        try {
+          const { headers } = await this.request(this.absolute(href), { method: 'GET' });
+          cur = headers.get('etag') || null;
+        } catch (e2) {
+          if (e2.status === 404) return { deleted: true, alreadyGone: true };
+          throw e2;
+        }
+      }
+    }
   }
 }
 
@@ -367,7 +422,9 @@ function parseTodo(icsText, href, etag) {
   const tags = (Array.isArray(catsRaw) ? catsRaw : catsRaw ? String(catsRaw).split(',') : [])
     .map((s) => String(s).trim())
     .filter(Boolean);
-  const list = String(vtodo.getFirstPropertyValue('x-taskslite-list') || '').trim();
+  const list = unescapeText(vtodo.getFirstPropertyValue('x-taskslite-list') || '').trim();
+  const myDay = unescapeText(vtodo.getFirstPropertyValue('x-taskslite-myday') || '').trim();
+  const steps = parseSteps(unescapeText(vtodo.getFirstPropertyValue('x-taskslite-steps') || ''));
 
   return {
     uid,
@@ -384,13 +441,70 @@ function parseTodo(icsText, href, etag) {
     remindAt,
     tags,
     list,
+    myDay,
+    steps,
   };
+}
+
+/** 步骤存成一个 JSON 文本属性；坏数据宁可丢掉也不能拖垮整条任务 */
+function parseSteps(raw) {
+  const s = typeof raw === 'string' ? raw.trim() : '';
+  if (!s) return [];
+  try {
+    const arr = JSON.parse(s);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((x) => x && typeof x.text === 'string' && x.text.trim())
+      .map((x) => ({ text: String(x.text).trim(), done: !!x.done }));
+  } catch (e) {
+    console.error('[ics] 步骤 JSON 解析失败，已忽略：', e.message);
+    return [];
+  }
 }
 
 /** Date → <input type="datetime-local"> 认的本地时间字符串 */
 function toLocalInput(d) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+
+/**
+ * X- 自定义属性的转义。
+ *
+ * ical.js 只会给**标准** TEXT 属性（SUMMARY / DESCRIPTION 等）转义 ,
+ * ; \，自定义的 X- 属性类型是 unknown，它原样输出 ——
+ * 于是 Radicale 按规范把未转义的逗号当成值分隔符，
+ * 列表名或步骤 JSON 会在第一个逗号处被截断。
+ * 这里自己转义：ical.js 原样输出（X- 属性它不碰反斜杠），
+ * 服务器按规范保留，读取时用 unescapeText 解回来。
+ *
+ * 只用于 X- 属性。标准属性交给 ical.js 就行，多转一次反而会多一层反斜杠。
+ */
+function escapeText(s) {
+  return String(s == null ? '' : s)
+    .replace(/\\/g, '\\\\')
+    .replace(/;/g, '\\;')
+    .replace(/,/g, '\\,');
+}
+
+/**
+ * X- 属性的读取端解转义。
+ * ical.js 只给标准属性解转义，X- 属性的值它按原始字符串给，得自己来。
+ * 单遍扫描，避免先替 \n 再替 \\ 造成的顺序歧义。
+ */
+function unescapeText(s) {
+  const str = String(s == null ? '' : s);
+  let out = '';
+  for (let i = 0; i < str.length; i++) {
+    const c = str[i];
+    if (c === '\\' && i + 1 < str.length) {
+      const n = str[++i];
+      out += (n === 'n' || n === 'N') ? '\n' : n;
+    } else {
+      out += c;
+    }
+  }
+  return out;
 }
 
 /** 由内部对象生成一份 VEVENT-free 的 VCALENDAR/VTODO 文本 */
@@ -413,6 +527,7 @@ function buildTodoIcs(todo) {
     v.updatePropertyWithValue('percent-complete', 0);
   }
 
+  // 标准属性：ical.js 自己会转义 , ; \，别多手
   v.updatePropertyWithValue('summary', todo.title || '');
   if (Number(todo.priority) > 0) v.updatePropertyWithValue('priority', Number(todo.priority));
   if (todo.notes) v.updatePropertyWithValue('description', todo.notes);
@@ -441,9 +556,18 @@ function buildTodoIcs(todo) {
   }
 
   const list = String(todo.list || '').trim();
-  if (list) v.updatePropertyWithValue('x-taskslite-list', list);
+  if (list) v.updatePropertyWithValue('x-taskslite-list', escapeText(list));
+  if (todo.myDay) v.updatePropertyWithValue('x-taskslite-myday', escapeText(String(todo.myDay)));
+  // CATEGORIES 是多值属性，逗号本来就是分隔符，不能转义
   const tags = (todo.tags || []).map((s) => String(s).trim()).filter(Boolean);
   if (tags.length) v.updatePropertyWithValue('categories', tags.join(','));
+  const steps = (todo.steps || []).filter((s) => s && String(s.text || '').trim());
+  if (steps.length) {
+    v.updatePropertyWithValue(
+      'x-taskslite-steps',
+      escapeText(JSON.stringify(steps.map((s) => ({ text: String(s.text).trim(), done: !!s.done }))))
+    );
+  }
 
   if (todo.remindAt) {
     const m = String(todo.remindAt).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
@@ -466,4 +590,5 @@ function buildTodoIcs(todo) {
 
 module.exports = {
   CaldavClient, parseMultistatus, decodeXml, normalizeBase, buildTodoIcs, parseTodo, toLocalInput,
+  escapeText, unescapeText,
 };

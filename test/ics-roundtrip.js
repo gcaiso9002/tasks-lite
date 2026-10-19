@@ -85,6 +85,44 @@ roundtrip('已完成', { uid: 'c@x', title: '已完成的事', completed: true }
   assert.ok(/STATUS:COMPLETED/i.test(ics));
 });
 
+roundtrip('英文逗号 / 分号 / 反斜杠', {
+  uid: 'punct@x',
+  title: '买牛奶, 鸡蛋; 面包\\卷',
+  notes: '第一行, 有逗号\n第二行; 有分号',
+  list: '家, 杂事',
+  tags: ['重要'],
+}, (t) => {
+  assert.strictEqual(t.title, '买牛奶, 鸡蛋; 面包\\卷', t.title);
+  assert.strictEqual(t.notes, '第一行, 有逗号\n第二行; 有分号', JSON.stringify(t.notes));
+  assert.strictEqual(t.list, '家, 杂事', t.list);
+});
+
+roundtrip('今天 + 步骤', {
+  uid: 'md@x', title: '今天要做', myDay: '2026-11-02',
+  steps: [
+    { text: '第一步：查资料', done: true },
+    { text: '第二步：写文档，"重点"部分', done: false },
+  ],
+}, (t, ics) => {
+  assert.strictEqual(t.myDay, '2026-11-02');
+  assert.strictEqual(t.steps.length, 2);
+  assert.strictEqual(t.steps[0].done, true);
+  assert.strictEqual(t.steps[1].done, false);
+  assert.ok(t.steps[1].text.includes('"重点"'), `步骤里的引号应还原：${t.steps[1].text}`);
+  assert.ok(/X-TASKSLITE-MYDAY:2026-11-02/i.test(ics), 'ICS 里应有 X-TASKSLITE-MYDAY');
+});
+
+// 步骤字段被外部写坏时不能拖垮整条任务
+const badSteps = parseTodo([
+  'BEGIN:VCALENDAR', 'VERSION:2.0', 'BEGIN:VTODO',
+  'UID:bs@x', 'SUMMARY:步骤坏掉', 'X-TASKSLITE-STEPS:{不是合法 JSON',
+  'END:VTODO', 'END:VCALENDAR',
+].join('\r\n'), 'https://example.com/c/bs.ics', '');
+assert.strictEqual(badSteps.title, '步骤坏掉');
+assert.deepStrictEqual(badSteps.steps, []);
+cases.push('坏步骤数据降级');
+console.log('  ✅ 坏步骤数据降级');
+
 // 无效 RRULE 不能让整条任务存崩
 const bad = parseTodo(buildTodoIcs({ uid: 'b@x', title: '坏规则', rrule: '这不是RRULE' }), 'https://example.com/c/b.ics', '');
 assert.ok(bad && bad.title === '坏规则', '非法 RRULE 不应导致保存失败');

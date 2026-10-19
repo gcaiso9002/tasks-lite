@@ -15,6 +15,7 @@ contextBridge.exposeInMainWorld('api', {
   checkReminders: () => ipcRenderer.invoke('reminder:check'),
   netDiag: () => ipcRenderer.invoke('net:diag'),
   toggleTask: (uid, completed) => ipcRenderer.invoke('task:toggle', uid, completed),
+  toggleMyDay: (uid, on) => ipcRenderer.invoke('task:myday', uid, on),
   onState: (cb) => ipcRenderer.on('state', (_evt, state) => cb(state)),
   /** 托盘菜单「新建任务」触发，把光标送到新建输入框 */
   onFocusComposer: (cb) => ipcRenderer.on('focus-composer', () => cb()),

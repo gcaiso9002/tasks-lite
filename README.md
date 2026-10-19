@@ -23,8 +23,8 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 
 | 文件 | 说明 |
 |---|---|
-| `Tasks Lite 1.2.0.exe` | 绿色免安装版，双击即用，推荐 |
-| `Tasks Lite Setup 1.2.0.exe` | NSIS 安装版，双击安装 |
+| `Tasks Lite 1.3.0.exe` | 绿色免安装版，双击即用，推荐 |
+| `Tasks Lite Setup 1.3.0.exe` | NSIS 安装版，双击安装 |
 
 两个版本都是 x64，未做代码签名，Windows 可能弹 SmartScreen 提示，选「仍要运行」即可。
 
@@ -36,17 +36,35 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 - **全局快捷键** `Ctrl+Shift+T` 唤起/隐藏，不需要先找到窗口
 - **开机自启**（可开关）：开机直接进托盘，不弹窗口
 - **主题**：浅色 / 深色 / 跟随系统，外加自定义强调色（即时生效、自动保存）
+- **今天**：手动把任务收进「今天」清单，列表行点 ☀ 就能加/移出，一直保留到做完
+- **四象限**：按「重要（高优先级）× 紧急（今天到期）」自动分四组，没完成的一眼看完
+- **日历**：月视图 / 周视图，点某天筛出当天的任务，点任务条直接进编辑区
+- **智能快速添加**：输入框里直接写 `明天交房租 #房租 @财务 !高`，回车自动拆成标题/日期/标签/清单/优先级，输入框下方有实时解析预览
+- **步骤**：任务内的可勾选清单，行上显示 `☑ 2/5`
 - **子任务**：任意层级，在任务编辑区的「上级任务」里指定，列表里自动缩进
-- **循环任务**：每天 / 每周 / 每个工作日 / 每月 / 每年，也能手写任意 RRULE
+- **循环任务**：每天 / 每周 / 每个工作日 / 每月 / 每年，也能手写任意 RRULE；**勾完成后自动生成下一条**，老的那条留档为已完成
 - **提醒**：到点弹 Windows 通知，点通知直接跳到那条任务
 - **列表 + 标签**：侧边栏按列表和标签分组，点一下就能筛
-- **智能筛选**：明天到期 / 本周内 / 未来 7 天 / 无截止日 / 高优先级 / 循环任务 / 有提醒 / 是父任务 / 是子任务
+- **智能筛选**：今天到期 / 本周内 / 未来 7 天 / 无截止日 / 高优先级 / 循环任务 / 有提醒 / 在今天 / 是父任务 / 是子任务
 - **回收站**：误删能原样恢复（本地，不会上传到服务器）
 - 新建 / 编辑任务，优先级（高 / 中 / 低）、截止日期、备注
 - 勾选完成（带系统通知）
 - 全文搜索
 - 自动同步（间隔可配）+ 窗口聚焦即同步 + Ctrl+R 手动同步
 - 断网时操作照常进行，联网后自动补传（乐观队列）
+
+### 快速添加能认什么
+
+| 写法 | 含义 |
+|---|---|
+| `明天` `后天` `大后天` `下周三` `本周五` `3天后` `月底` `11月5日` `11/5` `2026-12-25` | 截止日期 |
+| `15:30` `下午3点` `晚上8点半` | 提醒时间 |
+| `每个工作日` `每天` `每周` `每月` `每年` | 循环规则 |
+| `#标签` | 标签 |
+| `@清单` | 列表 |
+| `!高` `!中` `!低` `!1` `!5` `!9` | 优先级 |
+
+解析不出修饰时整句当作标题，**绝不吞字**。
 
 ### 退出方式
 
@@ -63,9 +81,11 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
    | 用户名 | `你的用户名` |
    | 密码 | 你自己的 |
    | 自动同步间隔 | 任意（分钟） |
+   | 连接方式 | 默认「直连」，见下 |
 
 3. 点「测试连接」，看到"连接成功，发现 N 个日历"就成了
-4. 点「保存」
+4. 点「诊断连接」可以看实际走没走系统代理、服务器返回什么、多久
+5. 点「保存」
 
 外观在同一面板下半部分的「外观」区域设置，**不用点保存，选了立刻生效**。
 
@@ -74,6 +94,12 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 必须是 `https://主机/用户名/` 这种 **principal 路径**，不能只写域名根路径。
 
 原因：CalDAV 规范里根路径只是 collection 不是 principal，不提供 `calendar-home-set` 属性（会返回 404）。Task.org 一类客户端直接在入口 URL 上取这个属性，拿到 404 就判定为「无效」。这个坑在调试 Task.org 时踩过，本客户端也做了规避 —— 即使入口 URL 取不到 `calendar-home-set`，也会回退用你填的 URL 本身。
+
+### 连接方式：默认直连
+
+CalDAV 请求**默认不走系统代理**。自己的服务器本来就能直连，绕代理既慢又会引入代理自己的错误状态码（比如莫名来一个 `402`）。
+
+如果你必须通过代理访问服务器，在设置里把「连接方式」改成「跟随系统代理」，诊断按钮会显示实际路由。
 
 ## 技术实现
 
@@ -88,7 +114,7 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 | 建日历 | `MKCALENDAR` |
 | 拉取全部任务 | `REPORT` calendar-query + VTODO filter |
 | 新建/更新任务 | `PUT`（带 `If-Match` etag 乐观锁） |
-| 删除 | `DELETE` |
+| 删除 | `DELETE`（带 `If-Match`） |
 
 认证用 Basic。任务实体是标准 iCalendar VTODO（RFC 5545），所以 Task.org、DAVx⁵ 等其它客户端能直接读同一个日历。
 
@@ -101,13 +127,29 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 | 提醒 | `VALARM` + `TRIGGER;VALUE=DATE-TIME`（也认别的客户端写的相对 `TRIGGER:-PT30M`，按截止日换算） |
 | 标签 | 标准 `CATEGORIES`，别的客户端也认 |
 | 列表 | `X-TASKSLITE-LIST`（iCalendar 没有"列表"这个概念，用自定义属性，不污染标准字段） |
+| 今天 | `X-TASKSLITE-MYDAY`，值为加入日期 `YYYY-MM-DD` |
+| 步骤 | `X-TASKSLITE-STEPS`，JSON 数组 |
+
+> **`X-` 自定义属性必须自己转义。** 实测 ical.js 对标准 `SUMMARY`/`DESCRIPTION` 会正确转义 `,` `;` `\`，但对 `X-` 属性（type=unknown）**既不转义也不解转义**。所以 `X-TASKSLITE-*` 里的 `,` `;` `\` 走 `escapeText`/`unescapeText` 手工处理；标准属性一律交给 ical.js，多转一次会多一层反斜杠。
+>
+> 折行（RFC 5545 的 75 octet）经验证是安全的：vobject 按字符边界折行，中英文长文本都能完整往返，不用规避。
 
 ### 同步策略
 
 - 服务器是权威。每次同步 `REPORT` 全量拉取并覆盖本地
 - 本地改动先写缓存保证界面立即响应，同时尝试 `PUT`
 - `PUT` 失败（断网）就进 pending 队列，下次同步重放
-- 队列重放时遇到 `409`（etag 不匹配）就丢弃该操作，交给下一次全量拉取覆盖 —— 避免死循环
+
+### 412 冲突自愈
+
+同一个日历上有第二个客户端（手机、另一个窗口、Tasks.org）时，两边会拿着各自缓存的 ETag 去写同一条任务，后写的那个必然拿到 `412 Precondition Failed`。单纯把 412 抛给用户是没用的 —— 他什么也做不了。
+
+所以本客户端的做法是**冲突了就自愈**：
+
+- `PUT` 撞 412 → 重读一次服务器现状，拿最新 ETag 再写一遍（后写为准）；服务器上已经没有这条就按新建写
+- `DELETE` 撞 412 → 重读 ETag 再删；服务器上已经被别人删掉（404）就当成功
+- 重试上限 3 次，仍冲突才如实报错（错误信息会说明是冲突）
+- 队列重放时遇到 `409`/`412` 会丢弃该操作，交给随后的全量拉取覆盖，避免死循环
 
 ### 回收站与提醒是本地的
 
@@ -120,7 +162,7 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 ```
 %APPDATA%\Tasks Lite\
   config.json     服务器配置与外观设置，密码字段是 enc:<DPAPI 密文>
-  tasks.json      本地任务缓存、回收站、提醒记录
+  tasks.json      本地任务缓存、回收站、提醒记录、待补传队列
 ```
 
 ## 开发
@@ -128,7 +170,7 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 ```bash
 npm install
 npm start              # 开发模式运行
-npm test               # 本地单测（ICS 字段往返 + 缓存层 + 渲染层自检）
+npm test               # 本地单测（ICS 往返 + 缓存层 + 解析/RRULE + 412 自愈 + 渲染层自检）
 node test/selftest.js  # 对真实 CalDAV 服务器做端到端自测（会写-读-删临时任务，需设 CALDAV_URL/USER/PASS 环境变量）
 npm run dist           # 打包 portable + nsis
 ```
@@ -138,20 +180,24 @@ npm run dist           # 打包 portable + nsis
 ### 目录
 
 ```
-src/main/caldav.js      CalDAV 协议客户端 + iCalendar 读写
-src/main/store.js       本地缓存 + 回收站 + 提醒记录
-src/main/config.js      配置 + DPAPI 密码加密
-src/main/index.js       主进程、IPC、同步调度、托盘、快捷键、自启、主题
-src/preload/preload.js  contextBridge
-src/renderer/           UI（原生 HTML/CSS/JS，无框架）
-scripts/check-dom.js    渲染层自检
-test/ics-roundtrip.js   ICS 字段往返（离线）
-test/store-unit.js      缓存层单测（离线）
-test/selftest.js        端到端协议自测（需真实服务器）
+src/main/caldav.js         CalDAV 协议客户端 + iCalendar 读写 + 412 自愈
+src/main/rrule.js          RRULE 解析与下一次发生日推算
+src/main/store.js          本地缓存 + 回收站 + 提醒记录 + 待补传队列
+src/main/config.js         配置 + DPAPI 密码加密
+src/main/index.js          主进程、IPC、同步调度、托盘、快捷键、自启、主题、循环滚动
+src/preload/preload.js     contextBridge
+src/renderer/              UI（原生 HTML/CSS/JS，无框架）
+src/renderer/quick-parse.js 快速添加的中文语法解析（UMD，主进程与渲染进程共用）
+scripts/check-dom.js       渲染层自检
+test/ics-roundtrip.js      ICS 字段往返（离线）
+test/store-unit.js         缓存层单测（离线）
+test/parse-and-rrule.js    快速添加解析 + RRULE 推算（离线）
+test/conflict-unit.js      412 冲突自愈（离线，假 fetch）
+test/selftest.js           端到端协议自测（需真实服务器）
 ```
 
 ## 已知限制
 
-- 循环任务只按 RRULE 存规则，**到期时不会自动生成下一条**；完成一条后需要自己改下一次的日期
+- `RRULE` 只支持 `FREQ`/`INTERVAL`/`BYDAY`/`BYMONTHDAY`/`BYMONTH`，`COUNT` 和 `UNTIL` 不参与自动滚动
 - 首次同步是全量拉取，任务量到几千条以上会变慢（家用场景无所谓）
 - 换 Windows 账号后 DPAPI 解不开密码，需要重新填
