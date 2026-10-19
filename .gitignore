@@ -1,0 +1,24 @@
+# 依赖与构建产物
+node_modules/
+dist/
+out/
+
+# Electron 运行时缓存
+node_modules/electron/dist/
+node_modules/electron/path.txt
+
+# 打包日志
+*.log
+builder-debug.yml
+
+# 本地凭据/数据（绝不能提交）
+config.json
+tasks.json
+
+# 编辑器
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# 说明：源码与 build/icon.ico 要提交；tasks-lite 内的一切本地配置不进版本库

@@ -1,0 +1,41 @@
+{
+  "name": "tasks-lite",
+  "productName": "Tasks Lite",
+  "version": "1.0.0",
+  "description": "本地 CalDAV 待办客户端，直连 Radicale / 任意 CalDAV 服务器",
+  "main": "src/main/index.js",
+  "type": "commonjs",
+  "author": "triple gold",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win --x64",
+    "dist:portable": "electron-builder --win portable --x64"
+  },
+  "dependencies": {
+    "ical.js": "2.2.1"
+  },
+  "devDependencies": {
+    "electron": "44.9.0",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "local.gcaiso.taskslite",
+    "productName": "Tasks Lite",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "src/**/*",
+      "package.json"
+    ],
+    "win": {
+      "icon": "build/icon.ico",
+      "target": [
+        { "target": "portable", "arch": ["x64"] },
+        { "target": "nsis", "arch": ["x64"] }
+      ]
+    }
+  }
+}

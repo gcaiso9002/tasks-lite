@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Tasks Lite</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Tasks&nbsp;Lite</div>
+    <input id="search" class="search" type="search" placeholder="搜索任务…  (Ctrl+F)" />
+    <div class="topbar-right">
+      <div id="syncState" class="sync-state"><span class="dot"></span><span class="txt">就绪</span></div>
+      <button id="btnSync" class="icon-btn" title="立即同步 (Ctrl+R)">⟳</button>
+      <button id="btnSettings" class="icon-btn" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <section class="composer">
+    <input id="newTitle" class="new-title" type="text" placeholder="添加任务后回车…" />
+    <select id="newPriority" class="new-priority" title="优先级">
+      <option value="0">无优先级</option>
+      <option value="1">高</option>
+      <option value="5">中</option>
+      <option value="9">低</option>
+    </select>
+    <input id="newDue" class="new-due" type="date" title="截止日期" />
+    <button id="btnAdd" class="primary">添加</button>
+  </section>
+
+  <nav class="filters">
+    <button class="filter active" data-filter="open">未完成</button>
+    <button class="filter" data-filter="today">今天到期</button>
+    <button class="filter" data-filter="overdue">已逾期</button>
+    <button class="filter" data-filter="done">已完成</button>
+    <button class="filter" data-filter="all">全部</button>
+    <span class="spacer"></span>
+    <span id="count" class="count"></span>
+  </nav>
+
+  <main id="list" class="list"></main>
+
+  <div id="empty" class="empty" hidden>
+    <div class="empty-art">✓</div>
+    <div class="empty-text">这里没有任务</div>
+  </div>
+
+  <!-- 单条任务的展开编辑区 -->
+  <div id="editor" class="editor" hidden>
+    <div class="editor-head">
+      <input id="edTitle" class="ed-title" type="text" placeholder="任务标题" />
+      <button id="edClose" class="icon-btn">✕</button>
+    </div>
+    <div class="editor-grid">
+      <label>优先级
+        <select id="edPriority">
+          <option value="0">无优先级</option>
+          <option value="1">高</option>
+          <option value="5">中</option>
+          <option value="9">低</option>
+        </select>
+      </label>
+      <label>截止日期 <input id="edDue" type="date" /></label>
+    </div>
+    <textarea id="edNotes" class="ed-notes" rows="4" placeholder="备注…"></textarea>
+    <div class="editor-foot">
+      <span id="edMeta" class="meta"></span>
+      <span class="spacer"></span>
+      <button id="edSave" class="primary">保存</button>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button id="setClose" class="icon-btn">✕</button>
+      </div>
+
+      <label class="field">
+        <span>服务器地址</span>
+        <input id="cfgServer" type="text" placeholder="https://caldav.example.com/用户名/" />
+        <small>必须是<strong>带用户名的 principal 路径</strong>。只填域名根路径的话，Task.org 一类客户端会因拿不到 calendar-home-set 而判定为无效。</small>
+      </label>
+
+      <label class="field">
+        <span>用户名</span>
+        <input id="cfgUser" type="text" autocomplete="username" />
+      </label>
+
+      <label class="field">
+        <span>密码</span>
+        <input id="cfgPass" type="password" autocomplete="current-password" placeholder="保存在本机，用 Windows DPAPI 加密" />
+      </label>
+
+      <label class="field">
+        <span>自动同步间隔（分钟）</span>
+        <input id="cfgInterval" type="number" min="1" max="120" />
+      </label>
+
+      <div class="modal-foot">
+        <span id="testResult" class="test-result"></span>
+        <span class="spacer"></span>
+        <button id="btnTest" class="ghost">测试连接</button>
+        <button id="btnSaveCfg" class="primary">保存</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="app.js"></script>
+</body>
+</html>
