@@ -37,6 +37,9 @@ function snapshot() {
   cfg.accent = accentColor();
   return {
     tasks: store.tasks,
+    trash: store.trash,
+    lists: collectLists(),
+    tags: collectTags(),
     config: cfg,
     sync: Object.assign({}, syncState, { lastSync: store.data.lastSync }),
   };
@@ -166,12 +169,81 @@ async function pushOrQueue(op, clientFn) {
       await ensureCalendar(client);
     }
     const r = await clientFn(client);
-    store.upsert(r);
+    // 删除类操作要真的从本地移除。之前这里一律 upsert，
+    // 删除成功后会往 tasks 里塞一条只剩 uid 的空壳，下次同步又"复活"它。
+    if (op.op === 'delete') store.remove(r.uid);
+    else store.upsert(r);
     return { ok: true };
   } catch (e) {
     store.enqueue(op);
     console.error('[push] 入队等待下次同步：', e.message);
     return { ok: true, queued: true, error: e.message };
+  }
+}
+
+// ================================================================ 列表 / 标签
+
+function tally(names) {
+  const m = new Map();
+  for (const n of names) m.set(n, (m.get(n) || 0) + 1);
+  return [...m.entries()]
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => a.name.localeCompare(b.name, 'zh'));
+}
+
+function collectLists() {
+  return tally(store.tasks.map((t) => String(t.list || '').trim() || '未分类'));
+}
+
+function collectTags() {
+  const out = [];
+  for (const t of store.tasks) {
+    for (const tag of t.tags || []) {
+      const s = String(tag).trim();
+      if (s) out.push(s);
+    }
+  }
+  return tally(out);
+}
+
+// ================================================================ 提醒
+
+let reminderTimer = null;
+
+/** 扫一遍到点的任务并弹 Windows 通知；同一个 remindAt 只弹一次 */
+function checkReminders() {
+  const now = Date.now();
+  let fired = 0;
+  for (const t of store.tasks) {
+    if (t.completed || !t.remindAt) continue;
+    const ts = new Date(t.remindAt).getTime();
+    if (!Number.isFinite(ts) || ts > now) continue;
+    if (store.alreadyReminded(t.uid, t.remindAt)) continue;
+    store.markReminded(t.uid, t.remindAt);
+    fired++;
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: '任务提醒',
+        body: t.title || '(无标题)',
+      });
+      n.on('click', () => openTaskInWindow(t.uid));
+      n.show();
+    }
+  }
+  if (fired) broadcast();
+  return fired;
+}
+
+function scheduleReminders() {
+  if (reminderTimer) clearInterval(reminderTimer);
+  reminderTimer = setInterval(checkReminders, 30000);
+}
+
+/** 通知点开后把窗口叫醒，并直接打开那条任务的编辑区 */
+function openTaskInWindow(uid) {
+  showWindow();
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed() && !win.webContents.isLoading()) {
+    win.webContents.send('open-task', uid);
   }
 }
 
@@ -335,19 +407,61 @@ function registerIpc() {
     });
   });
 
-  ipcMain.handle('task:delete', async (_e, uid) => {
-    const t = store.get(uid);
+  /** 移进回收站：本地留档，服务器上真删，误删了能原样恢复 */
+  ipcMain.handle('task:trash', async (_e, uid) => {
+    const t = store.moveToTrash(uid);
     if (!t) return { ok: true };
-    store.remove(uid);
-    if (!t.href) { broadcast(); return { ok: true }; }
-    await pushOrQueue({ op: 'delete', uid, href: t.href, etag: t.etag || null }, async (client) => {
-      await client.deleteTodo(client.absolute(t.href), t.etag || null);
-      return { uid };
-    });
-    store.remove(uid);
+
+    // 子任务不能认一个已经在回收站里的父任务，否则会缩进到看不见的地方
+    for (const c of store.tasks.filter((x) => x.parentUid === uid)) {
+      c.parentUid = '';
+      store.upsert(c);
+      await pushOrQueue({ op: 'put', todo: c, baseEtag: c.etag || null }, async (client) => {
+        const href = store.data.calendarHref || (await ensureCalendar(client)).href;
+        const r = await client.putTodo(href, c, c.etag || null);
+        return Object.assign({}, c, { href: r.href, etag: r.etag });
+      });
+    }
+
+    if (t.href) {
+      await pushOrQueue({ op: 'delete', uid, href: t.href, etag: t.etag || null }, async (client) => {
+        await client.deleteTodo(client.absolute(t.href), t.etag || null);
+        return { uid };
+      });
+    }
+    delete store.data.reminded[uid];
+    store.save();
     broadcast();
     return { ok: true };
   });
+
+  /** 从回收站恢复：服务器上那条已经删了，所以清掉 href/etag 重新 PUT */
+  ipcMain.handle('task:restore', async (_e, uid) => {
+    const t = store.restoreFromTrash(uid);
+    if (!t) return { ok: true };
+    await pushOrQueue({ op: 'put', todo: t, baseEtag: null }, async (client) => {
+      const href = store.data.calendarHref || (await ensureCalendar(client)).href;
+      const r = await client.putTodo(href, t, null);
+      return Object.assign({}, t, { href: r.href, etag: r.etag });
+    });
+    broadcast();
+    return { ok: true };
+  });
+
+  ipcMain.handle('trash:purge', (_e, uid) => {
+    store.purgeFromTrash(uid);
+    broadcast();
+    return { ok: true };
+  });
+
+  ipcMain.handle('trash:empty', () => {
+    store.emptyTrash();
+    broadcast();
+    return { ok: true };
+  });
+
+  /** 手动扫一遍到点的提醒，设置完想立刻看到效果时用 */
+  ipcMain.handle('reminder:check', () => ({ fired: checkReminders() }));
 
   ipcMain.handle('task:toggle', async (_e, uid, completed) => {
     const t = store.get(uid);
@@ -381,6 +495,7 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '立即同步', accelerator: 'CmdOrCtrl+R', click: () => runSync('manual') },
+        { label: '测试提醒通知', click: () => { checkReminders(); } },
         { label: '显示 / 隐藏', accelerator: GLOBAL_TOGGLE, click: toggleWindow },
         { type: 'separator' },
         { label: '退出', click: quitApp },
@@ -412,7 +527,7 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.1.0',
+            message: 'Tasks Lite 1.2.0',
             detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
                     + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
                     + `全局快捷键 ${GLOBAL_TOGGLE}`,
@@ -454,6 +569,7 @@ if (!gotLock) {
     if (!ok) console.error(`[shortcut] 全局快捷键 ${GLOBAL_TOGGLE} 注册失败（可能已被占用）`);
 
     scheduleAutoSync();
+    scheduleReminders();
     setTimeout(() => runSync('startup'), 1200);
 
     app.on('activate', () => showWindow());

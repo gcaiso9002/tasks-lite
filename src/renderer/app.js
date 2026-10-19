@@ -1,17 +1,23 @@
 'use strict';
 
-let state = { tasks: [], config: {}, sync: {} };
-let filter = 'open';
+let state = { tasks: [], trash: [], lists: [], tags: [], config: {}, sync: {} };
+let filter = 'open';          // open | today | overdue | done | all
+let smartFilter = '';         // '' 表示不额外筛
+let listFilter = '';          // '' 表示不按列表筛
+let tagFilter = '';
+let view = 'tasks';           // tasks | trash
 let keyword = '';
 let editingUid = null;
 let toastTimer = null;
 
 const $ = (id) => document.getElementById(id);
+const NO_LIST = '未分类';
 
 // ================================================================ 工具
 
-function todayStr() {
+function todayStr(offsetDays = 0) {
   const d = new Date();
+  d.setDate(d.getDate() + offsetDays);
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
 
@@ -29,6 +35,15 @@ function priorityLabel(p) {
   if (Number(p) === 5) return '中';
   if (Number(p) === 9) return '低';
   return '';
+}
+
+function listNameOf(t) {
+  return String(t.list || '').trim() || NO_LIST;
+}
+
+function shortText(s, n) {
+  const str = String(s || '');
+  return str.length > n ? str.slice(0, n - 1) + '…' : str;
 }
 
 // ================================================================ 主题
@@ -69,7 +84,53 @@ function applyThemeView(cfg) {
   root.style.colorScheme = root.dataset.theme;
 }
 
+// ================================================================ 层级
+
+/** 任务在父子树里的缩进层级；带环路保护，最多 10 层 */
+function depthOf(t, byUid) {
+  let d = 0;
+  const seen = new Set([t.uid]);
+  let cur = t;
+  while (cur && cur.parentUid) {
+    const p = byUid.get(cur.parentUid);
+    if (!p || seen.has(p.uid)) break;
+    seen.add(p.uid);
+    cur = p;
+    d++;
+    if (d >= 10) break;
+  }
+  return d;
+}
+
+/** 自己的子孙，父任务下拉里要排除，否则会选出一个环 */
+function descendantUids(uid, tasks) {
+  const out = new Set();
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const t of tasks) {
+      if (t.parentUid && !out.has(t.uid) && (out.has(t.parentUid) || t.parentUid === uid)) {
+        out.add(t.uid);
+        changed = true;
+      }
+    }
+  }
+  return out;
+}
+
 // ================================================================ 过滤
+
+const SMART = {
+  tomorrow: (t) => !t.completed && t.due === todayStr(1),
+  week: (t) => !t.completed && !!t.due && t.due >= todayStr() && t.due <= todayStr(6),
+  next7: (t) => !t.completed && !!t.due && t.due >= todayStr() && t.due <= todayStr(6),
+  nodue: (t) => !t.completed && !t.due,
+  high: (t) => !t.completed && Number(t.priority) === 1,
+  repeat: (t) => !t.completed && !!t.rrule,
+  remind: (t) => !t.completed && !!t.remindAt,
+  parent: (t) => state.tasks.some((x) => x.parentUid === t.uid),
+  sub: (t) => !t.completed && !!t.parentUid,
+};
 
 function visibleTasks() {
   const today = todayStr();
@@ -79,6 +140,10 @@ function visibleTasks() {
   else if (filter === 'done') list = list.filter((t) => t.completed);
   else if (filter === 'today') list = list.filter((t) => !t.completed && t.due && t.due <= today);
   else if (filter === 'overdue') list = list.filter((t) => !t.completed && t.due && t.due < today);
+
+  if (smartFilter && SMART[smartFilter]) list = list.filter(SMART[smartFilter]);
+  if (listFilter) list = list.filter((t) => listNameOf(t) === listFilter);
+  if (tagFilter) list = list.filter((t) => (t.tags || []).includes(tagFilter));
 
   if (keyword) {
     const k = keyword.toLowerCase();
@@ -106,18 +171,33 @@ function visibleTasks() {
 // ================================================================ 渲染
 
 function render() {
+  const byUid = new Map(state.tasks.map((t) => [t.uid, t]));
+  const trashMode = view === 'trash';
+
+  document.querySelector('.main').classList.toggle('trash-mode', trashMode);
+  $('btnTrash').classList.toggle('active', trashMode);
+  $('btnTrashEmpty').hidden = !(trashMode && state.trash.length);
+
   const list = $('list');
+  list.innerHTML = '';
+
+  if (trashMode) {
+    renderTrash(list);
+    return;
+  }
+
   const items = visibleTasks();
   const today = todayStr();
-
-  list.innerHTML = '';
   $('empty').hidden = items.length > 0;
   $('count').textContent = `${state.tasks.filter((t) => !t.completed).length} 项未完成 / 共 ${state.tasks.length} 项`;
 
   for (const t of items) {
+    const depth = depthOf(t, byUid);
     const row = document.createElement('div');
-    row.className = 'item' + (t.completed ? ' done' : '') + (editingUid === t.uid ? ' editing' : '');
+    row.className = 'item' + (t.completed ? ' done' : '') + (editingUid === t.uid ? ' editing' : '')
+      + (depth ? ' sub' : '');
     row.dataset.uid = t.uid;
+    if (depth) row.style.paddingLeft = `${12 + depth * 20}px`;
 
     const badges = [];
     const pl = priorityLabel(t.priority);
@@ -127,6 +207,9 @@ function render() {
       const label = t.due === today ? '今天' : t.due;
       badges.push(`<span class="badge ${cls}">📅 ${label}</span>`);
     }
+    if (t.rrule) badges.push(`<span class="badge repeat">🔁 ${repeatLabel(t.rrule)}</span>`);
+    if (t.remindAt) badges.push(`<span class="badge remind">⏰ ${t.remindAt.replace('T', ' ')}</span>`);
+    for (const tag of t.tags || []) badges.push(`<span class="badge tag">#${escapeHtml(tag)}</span>`);
     if (t.notes) badges.push('<span class="badge note">有备注</span>');
     if (t.etag === '' && t.href) badges.push('<span class="badge note">待上传</span>');
 
@@ -136,13 +219,103 @@ function render() {
         <div class="title"></div>
         ${badges.length ? `<div class="badges">${badges.join('')}</div>` : ''}
       </div>
-      <button class="del" data-act="del" title="删除">✕</button>`;
+      <button class="del" data-act="del" title="移到回收站">✕</button>`;
 
     row.querySelector('.title').textContent = t.title || '(无标题)';
     list.appendChild(row);
   }
 
-  // 同步状态
+  renderSidebar();
+  renderSyncState();
+}
+
+function repeatLabel(rrule) {
+  const s = String(rrule || '').toUpperCase();
+  if (s === 'FREQ=DAILY') return '每天';
+  if (s === 'FREQ=WEEKLY') return '每周';
+  if (s === 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR') return '工作日';
+  if (s === 'FREQ=MONTHLY') return '每月';
+  if (s === 'FREQ=YEARLY') return '每年';
+  return '循环';
+}
+
+function escapeHtml(s) {
+  return String(s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function renderTrash(list) {
+  $('count').textContent = `回收站 ${state.trash.length} 项`;
+  $('empty').hidden = state.trash.length > 0;
+  if (!state.trash.length) {
+    $('empty').querySelector('.empty-text').textContent = '回收站是空的';
+    return;
+  }
+  for (const t of state.trash) {
+    const row = document.createElement('div');
+    row.className = 'item trash-item';
+    row.dataset.uid = t.uid;
+    const when = t.trashedAt ? new Date(t.trashedAt).toLocaleString('zh-CN') : '';
+    row.innerHTML = `
+      <div class="body">
+        <div class="title"></div>
+        <div class="badges"><span class="badge note">删除于 ${escapeHtml(when)}</span></div>
+      </div>
+      <button class="ghost tiny" data-act="restore">恢复</button>
+      <button class="del show" data-act="purge" title="彻底删除">✕</button>`;
+    row.querySelector('.title').textContent = t.title || '(无标题)';
+    list.appendChild(row);
+  }
+}
+
+function renderSidebar() {
+  // 注意 mk() 必须显式接收容器：列表和标签共用它，
+  // 一旦闭包里写死 listNav，标签就会被追加到「列表」那一栏里去
+  const mk = (host, label, active, count, onClick) => {
+    const b = document.createElement('button');
+    b.className = 'side-item' + (active ? ' active' : '');
+    b.innerHTML = `<span class="side-label"></span><span class="pill"></span>`;
+    b.querySelector('.side-label').textContent = label;
+    b.querySelector('.pill').textContent = count > 0 ? String(count) : '';
+    b.addEventListener('click', onClick);
+    host.appendChild(b);
+  };
+
+  const listNav = $('listNav');
+  listNav.innerHTML = '';
+  for (const l of state.lists || []) {
+    mk(listNav, l.name, listFilter === l.name, l.count, () => {
+      listFilter = listFilter === l.name ? '' : l.name;
+      view = 'tasks';
+      render();
+    });
+  }
+  if (!(state.lists || []).length) {
+    const hint = document.createElement('div');
+    hint.className = 'side-hint';
+    hint.textContent = '还没有列表；在任务里填「列表」就会出现在这里';
+    listNav.appendChild(hint);
+  }
+
+  const tagNav = $('tagNav');
+  tagNav.innerHTML = '';
+  for (const t of state.tags || []) {
+    mk(tagNav, `#${t.name}`, tagFilter === t.name, t.count, () => {
+      tagFilter = tagFilter === t.name ? '' : t.name;
+      view = 'tasks';
+      render();
+    });
+  }
+  if (!(state.tags || []).length) {
+    const hint = document.createElement('div');
+    hint.className = 'side-hint';
+    hint.textContent = '还没有标签；在任务里填「标签」就会出现在这里';
+    tagNav.appendChild(hint);
+  }
+
+  $('trashCount').textContent = state.trash.length ? String(state.trash.length) : '';
+}
+
+function renderSyncState() {
   const ss = $('syncState');
   ss.className = 'sync-state';
   const txt = ss.querySelector('.txt');
@@ -171,14 +344,64 @@ function addTask() {
   const input = $('newTitle');
   const title = input.value.trim();
   if (!title) return;
-  $('newTitle').value = '';
+  input.value = '';
   window.api.saveTask({
     title,
     priority: Number($('newPriority').value) || 0,
     due: $('newDue').value || null,
     notes: '',
+    // 侧边栏选中了列表就跟着走，省得每条都去编辑里补
+    list: listFilter && listFilter !== NO_LIST ? listFilter : '',
+    tags: tagFilter ? [tagFilter] : [],
   });
 }
+
+$('btnAdd').addEventListener('click', addTask);
+$('newTitle').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTask(); });
+
+$('list').addEventListener('click', (e) => {
+  const row = e.target.closest('.item');
+  if (!row) return;
+  const uid = row.dataset.uid;
+  const act = e.target.dataset.act;
+
+  if (act === 'restore') {
+    e.stopPropagation();
+    window.api.restoreTask(uid).then(() => toast('已恢复'));
+    return;
+  }
+  if (act === 'purge') {
+    e.stopPropagation();
+    const t = state.trash.find((x) => x.uid === uid);
+    if (confirm(`彻底删除「${t ? t.title : ''}」？这一步不可恢复。`)) {
+      window.api.purgeTask(uid).then(() => toast('已彻底删除'));
+    }
+    return;
+  }
+
+  if (view === 'trash') return;
+
+  if (act === 'toggle') {
+    const t = state.tasks.find((x) => x.uid === uid);
+    window.api.toggleTask(uid, !(t && t.completed));
+    e.stopPropagation();
+    return;
+  }
+  if (act === 'del') {
+    e.stopPropagation();
+    const t = state.tasks.find((x) => x.uid === uid);
+    if (confirm(`把「${t ? t.title : ''}」移到回收站？`)) window.api.trashTask(uid);
+    return;
+  }
+  if (editingUid === uid) return closeEditor();
+  openEditor(uid);
+});
+
+// ---------------- 编辑区 ----------------
+
+const KNOWN_REPEAT = [
+  '', 'FREQ=DAILY', 'FREQ=WEEKLY', 'FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR', 'FREQ=MONTHLY', 'FREQ=YEARLY',
+];
 
 function openEditor(uid) {
   const t = state.tasks.find((x) => x.uid === uid);
@@ -188,6 +411,50 @@ function openEditor(uid) {
   $('edPriority').value = String(t.priority || 0);
   $('edDue').value = t.due || '';
   $('edNotes').value = t.notes || '';
+  $('edRemind').value = t.remindAt || '';
+  $('edList').value = t.list || '';
+  $('edTags').value = (t.tags || []).join(', ');
+
+  // 不认识的 RRULE 补一条选项，别被下拉框默默改掉
+  const rep = $('edRepeat');
+  const extra = Array.from(rep.options).find((o) => o.value.startsWith('CUSTOM:'));
+  if (extra) extra.remove();
+  const rrule = String(t.rrule || '');
+  if (rrule && !KNOWN_REPEAT.includes(rrule)) {
+    const o = document.createElement('option');
+    o.value = rrule;
+    o.textContent = `自定义：${rrule}`;
+    rep.insertBefore(o, rep.querySelector('option[value="__custom"]'));
+  }
+  rep.value = rrule || '';
+
+  // 列表候选来自现有任务，避免每条都手打
+  const dl = $('listOptions');
+  dl.innerHTML = '';
+  for (const l of state.lists || []) {
+    if (l.name === NO_LIST) continue;
+    const o = document.createElement('option');
+    o.value = l.name;
+    dl.appendChild(o);
+  }
+
+  // 上级任务下拉：排除自己和自己的子孙，防止选出环
+  const sel = $('edParent');
+  sel.innerHTML = '';
+  const none = document.createElement('option');
+  none.value = '';
+  none.textContent = '无（顶级任务）';
+  sel.appendChild(none);
+  const banned = descendantUids(uid, state.tasks);
+  for (const x of state.tasks) {
+    if (x.uid === uid || banned.has(x.uid)) continue;
+    const o = document.createElement('option');
+    o.value = x.uid;
+    o.textContent = shortText(x.title || '(无标题)', 40);
+    sel.appendChild(o);
+  }
+  sel.value = t.parentUid || '';
+
   $('edMeta').textContent = t.etag === '' ? '尚未上传到服务器' : '已同步到服务器';
   $('editor').hidden = false;
   render();
@@ -203,6 +470,14 @@ function closeEditor() {
 async function saveEditor() {
   const t = state.tasks.find((x) => x.uid === editingUid);
   if (!t) return closeEditor();
+
+  let rrule = $('edRepeat').value;
+  if (rrule === '__custom') {
+    const s = prompt('输入 RRULE 规则，例如 FREQ=MONTHLY;BYMONTHDAY=15', t.rrule || 'FREQ=');
+    rrule = s ? s.trim().toUpperCase() : (t.rrule || '');
+    $('edRepeat').value = rrule;
+  }
+
   const patch = {
     uid: t.uid,
     etag: t.etag,
@@ -212,47 +487,47 @@ async function saveEditor() {
     priority: Number($('edPriority').value) || 0,
     due: $('edDue').value || null,
     notes: $('edNotes').value,
+    remindAt: $('edRemind').value || '',
+    rrule,
+    list: $('edList').value.trim(),
+    tags: $('edTags').value.split(/[,，]/).map((s) => s.trim()).filter(Boolean),
+    parentUid: $('edParent').value || '',
   };
   closeEditor();
   const r = await window.api.saveTask(patch);
   if (r && r.queued) toast('离线：已存本地，下次同步自动上传');
 }
 
-$('btnAdd').addEventListener('click', addTask);
-$('newTitle').addEventListener('keydown', (e) => { if (e.key === 'Enter') addTask(); });
-
-$('list').addEventListener('click', (e) => {
-  const row = e.target.closest('.item');
-  if (!row) return;
-  const uid = row.dataset.uid;
-  const act = e.target.dataset.act;
-
-  if (act === 'toggle') {
-    const t = state.tasks.find((x) => x.uid === uid);
-    window.api.toggleTask(uid, !(t && t.completed));
-    e.stopPropagation();
-    return;
-  }
-  if (act === 'del') {
-    e.stopPropagation();
-    const t = state.tasks.find((x) => x.uid === uid);
-    if (confirm(`删除「${t ? t.title : ''}」？`)) window.api.deleteTask(uid);
-    return;
-  }
-  if (editingUid === uid) return closeEditor();
-  openEditor(uid);
-});
-
 $('edClose').addEventListener('click', closeEditor);
 $('edSave').addEventListener('click', saveEditor);
+
+// ---------------- 过滤 / 侧边栏 ----------------
 
 document.querySelectorAll('.filter').forEach((b) => {
   b.addEventListener('click', () => {
     document.querySelectorAll('.filter').forEach((x) => x.classList.remove('active'));
     b.classList.add('active');
     filter = b.dataset.filter;
+    view = 'tasks';
     render();
   });
+});
+
+$('filterSmart').addEventListener('change', (e) => {
+  smartFilter = e.target.value;
+  view = 'tasks';
+  render();
+});
+
+$('btnTrash').addEventListener('click', () => {
+  view = view === 'trash' ? 'tasks' : 'trash';
+  render();
+});
+
+$('btnTrashEmpty').addEventListener('click', () => {
+  if (confirm(`清空回收站里的 ${state.trash.length} 项？不可恢复。`)) {
+    window.api.emptyTrash().then(() => toast('回收站已清空'));
+  }
 });
 
 $('search').addEventListener('input', (e) => { keyword = e.target.value.trim(); render(); });
@@ -386,6 +661,7 @@ document.addEventListener('keydown', (e) => {
   else if (e.key === 'Escape') {
     if (!$('settings').hidden) $('settings').hidden = true;
     else if (!$('editor').hidden) closeEditor();
+    else if (view === 'trash') { view = 'tasks'; render(); }
   }
 });
 
@@ -405,5 +681,13 @@ window.api.getState().then(acceptState);
 window.api.onFocusComposer(() => {
   $('settings').hidden = true;
   $('editor').hidden = true;
+  if (view === 'trash') { view = 'tasks'; render(); }
   $('newTitle').focus();
+});
+
+// 点提醒通知后主进程会点名要打开哪条任务
+window.api.onOpenTask((uid) => {
+  view = 'tasks';
+  render();
+  openEditor(uid);
 });

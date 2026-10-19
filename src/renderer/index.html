@@ -17,33 +17,67 @@
     </div>
   </header>
 
-  <section class="composer">
-    <input id="newTitle" class="new-title" type="text" placeholder="添加任务后回车…" />
-    <select id="newPriority" class="new-priority" title="优先级">
-      <option value="0">无优先级</option>
-      <option value="1">高</option>
-      <option value="5">中</option>
-      <option value="9">低</option>
-    </select>
-    <input id="newDue" class="new-due" type="date" title="截止日期" />
-    <button id="btnAdd" class="primary">添加</button>
-  </section>
+  <div class="app">
+    <!-- 侧边栏：列表 / 标签 / 回收站 -->
+    <aside class="sidebar">
+      <div class="side-sec">
+        <div class="side-head">列表</div>
+        <div id="listNav" class="side-list"></div>
+      </div>
+      <div class="side-sec">
+        <div class="side-head">标签</div>
+        <div id="tagNav" class="side-list"></div>
+      </div>
+      <div class="side-sec side-bottom">
+        <button id="btnTrash" class="side-item">
+          <span>🗑 回收站</span><span id="trashCount" class="pill"></span>
+        </button>
+        <button id="btnTrashEmpty" class="side-mini" hidden>清空回收站</button>
+      </div>
+    </aside>
 
-  <nav class="filters">
-    <button class="filter active" data-filter="open">未完成</button>
-    <button class="filter" data-filter="today">今天到期</button>
-    <button class="filter" data-filter="overdue">已逾期</button>
-    <button class="filter" data-filter="done">已完成</button>
-    <button class="filter" data-filter="all">全部</button>
-    <span class="spacer"></span>
-    <span id="count" class="count"></span>
-  </nav>
+    <div class="main">
+      <section class="composer">
+        <input id="newTitle" class="new-title" type="text" placeholder="添加任务后回车…" />
+        <select id="newPriority" class="new-priority" title="优先级">
+          <option value="0">无优先级</option>
+          <option value="1">高</option>
+          <option value="5">中</option>
+          <option value="9">低</option>
+        </select>
+        <input id="newDue" class="new-due" type="date" title="截止日期" />
+        <button id="btnAdd" class="primary">添加</button>
+      </section>
 
-  <main id="list" class="list"></main>
+      <nav class="filters">
+        <button class="filter active" data-filter="open">未完成</button>
+        <button class="filter" data-filter="today">今天到期</button>
+        <button class="filter" data-filter="overdue">已逾期</button>
+        <button class="filter" data-filter="done">已完成</button>
+        <button class="filter" data-filter="all">全部</button>
+        <select id="filterSmart" class="smart-filter" title="更多筛选">
+          <option value="">更多筛选…</option>
+          <option value="tomorrow">明天到期</option>
+          <option value="week">本周内到期</option>
+          <option value="next7">未来 7 天</option>
+          <option value="nodue">无截止日</option>
+          <option value="high">高优先级</option>
+          <option value="repeat">循环任务</option>
+          <option value="remind">有提醒</option>
+          <option value="parent">是父任务</option>
+          <option value="sub">是子任务</option>
+        </select>
+        <span class="spacer"></span>
+        <span id="count" class="count"></span>
+      </nav>
 
-  <div id="empty" class="empty" hidden>
-    <div class="empty-art">✓</div>
-    <div class="empty-text">这里没有任务</div>
+      <main id="list" class="list"></main>
+
+      <div id="empty" class="empty" hidden>
+        <div class="empty-art">✓</div>
+        <div class="empty-text">这里没有任务</div>
+      </div>
+    </div>
   </div>
 
   <!-- 单条任务的展开编辑区 -->
@@ -62,7 +96,26 @@
         </select>
       </label>
       <label>截止日期 <input id="edDue" type="date" /></label>
+      <label>提醒时间 <input id="edRemind" type="datetime-local" /></label>
+      <label>重复
+        <select id="edRepeat">
+          <option value="">不重复</option>
+          <option value="FREQ=DAILY">每天</option>
+          <option value="FREQ=WEEKLY">每周</option>
+          <option value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR">每个工作日</option>
+          <option value="FREQ=MONTHLY">每月</option>
+          <option value="FREQ=YEARLY">每年</option>
+          <option value="__custom">自定义 RRULE…</option>
+        </select>
+      </label>
+      <label>列表 <input id="edList" list="listOptions" placeholder="留空＝未分类" /></label>
+      <label>标签 <input id="edTags" placeholder="逗号分隔，如：家,急" /></label>
     </div>
+    <label class="editor-row">
+      <span>上级任务</span>
+      <select id="edParent"></select>
+    </label>
+    <datalist id="listOptions"></datalist>
     <textarea id="edNotes" class="ed-notes" rows="4" placeholder="备注…"></textarea>
     <div class="editor-foot">
       <span id="edMeta" class="meta"></span>

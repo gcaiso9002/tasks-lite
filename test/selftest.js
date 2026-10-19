@@ -92,7 +92,33 @@ function check(name, cond, extra) {
   check('状态已变为完成', after && after.completed === true);
   check('etag 已变化', after && after.etag !== put.etag);
 
-  console.log('\n=== 6. 删除测试任务（DELETE） ===');
+  console.log('\n=== 6. 子任务 / 循环 / 提醒 / 标签 / 列表 往返真实服务器 ===');
+  // Radicale 会不会照单全收这些字段，只有真打一次服务器才知道
+  const rich = {
+    uid: `${TEST_UID}-rich`,
+    title: '__子任务__',
+    parentUid: TEST_UID,
+    rrule: 'FREQ=WEEKLY;BYDAY=MO,WE,FR',
+    remindAt: '2030-12-30T09:15',
+    tags: ['家', '急'],
+    list: '生活',
+    priority: 5,
+  };
+  const richPut = await client.putTodo(cal.href, rich);
+  check('含子任务/循环/提醒的任务 PUT 成功', !!richPut.etag, richPut.href);
+
+  const richBack = (await client.listTodos(cal.href)).find((t) => t.uid === rich.uid);
+  check('能读回该任务', !!richBack);
+  if (richBack) {
+    check('  上级任务 UID 正确', richBack.parentUid === TEST_UID, `实际="${richBack.parentUid}"`);
+    check('  RRULE 正确', richBack.rrule === rich.rrule, `实际="${richBack.rrule}"`);
+    check('  提醒时间正确', richBack.remindAt === rich.remindAt, `实际="${richBack.remindAt}"`);
+    check('  标签正确', JSON.stringify(richBack.tags) === JSON.stringify(rich.tags), JSON.stringify(richBack.tags));
+    check('  列表正确', richBack.list === rich.list, `实际="${richBack.list}"`);
+  }
+  await client.deleteTodo(richPut.href, null);
+
+  console.log('\n=== 7. 删除测试任务（DELETE） ===');
   await client.deleteTodo(put.href, put2.etag);
   const rest = await client.listTodos(cal.href);
   check('测试任务已消失', !rest.find((t) => t.uid === TEST_UID));

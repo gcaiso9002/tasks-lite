@@ -254,10 +254,33 @@ function normalizeBase(url) {
 
 // ================================================================ VTODO 转换
 
+/** iCalendar 允许的 FREQ 取值；写之前先校验，免得生成一条自己都解析不了的 ICS */
+const ALLOWED_FREQ = ['SECONDLY', 'MINUTELY', 'HOURLY', 'DAILY', 'WEEKLY', 'MONTHLY', 'YEARLY'];
+
+function isValidRrule(s) {
+  const m = /^FREQ=([A-Z]+)/i.exec(String(s || '').trim());
+  return !!(m && ALLOWED_FREQ.includes(m[1].toUpperCase()));
+}
+
 /** 把 ical.js 解析出的 VTODO 变成我们内部用的扁平对象 */
 function parseTodo(icsText, href, etag) {
-  const root = new ICAL.Component(ICAL.parse(icsText));
-  const vtodo = root.getFirstSubcomponent('vtodo');
+  let root;
+  try {
+    root = new ICAL.Component(ICAL.parse(icsText));
+  } catch (e) {
+    // 别的客户端可能写了不合法的 RRULE / TRIGGER，整份 ICS 会解析失败。
+    // 摘掉那几行再试一次 —— 宁可少一个循环/提醒，也不能让整条任务从列表里消失。
+    const cleaned = String(icsText)
+      .replace(/^RRULE[;:].*$/gim, '')
+      .replace(/^TRIGGER[;:].*$/gim, '');
+    try {
+      root = new ICAL.Component(ICAL.parse(cleaned));
+      console.error('[ics] 摘掉不合法的 RRULE/TRIGGER 后才解析成功：', href);
+    } catch (e2) {
+      console.error('[ics] 解析失败，已跳过：', href, e2.message);
+      return null;
+    }
+  }  const vtodo = root.getFirstSubcomponent('vtodo');
   if (!vtodo) return null;
 
   const uid = vtodo.getFirstPropertyValue('uid');
@@ -287,6 +310,59 @@ function parseTodo(icsText, href, etag) {
     if (m) modified = `${m[1]}-${m[2]}-${m[3]}T${m[4]}:${m[5]}:${m[6]}`;
   }
 
+  // 子任务：RELATED-TO;RELTYPE=PARENT:<父任务 uid>
+  let parentUid = '';
+  const relProp = vtodo.getFirstProperty('related-to');
+  if (relProp) {
+    const reltype = String(relProp.getParameter('reltype') || 'PARENT').toUpperCase();
+    const val = String(relProp.getFirstValue() || '').trim();
+    // 没写 RELTYPE 的 RELATED-TO 按规范默认就是 PARENT
+    if (val && (reltype === 'PARENT' || reltype === '')) parentUid = val;
+  }
+
+  // 循环：保留 RRULE 原文（不含 "RRULE:" 前缀），方便原样回写
+  let rrule = '';
+  const rruleProp = vtodo.getFirstProperty('rrule');
+  if (rruleProp) {
+    const recur = rruleProp.getFirstValue();
+    if (recur) {
+      try {
+        rrule = String(recur.toString()).toUpperCase().replace(/^RRULE:/, '');
+      } catch (e) {
+        rrule = '';
+      }
+    }
+  }
+
+  // 提醒：VALARM 里的 TRIGGER，绝对时间直接用，相对时间按截止日换算
+  let remindAt = '';
+  const alarm = vtodo.getFirstSubcomponent('valarm');
+  if (alarm) {
+    const trig = alarm.getFirstProperty('trigger');
+    if (trig) {
+      if (String(trig.type).toLowerCase() === 'duration') {
+        const dur = trig.getFirstValue();
+        const secs = dur && typeof dur.toSeconds === 'function' ? Math.round(dur.toSeconds()) : 0;
+        if (secs && due) {
+          const base = new Date(`${due}T00:00:00`);
+          base.setSeconds(base.getSeconds() + secs);
+          remindAt = toLocalInput(base);
+        }
+      } else {
+        const v = trig.getFirstValue();
+        if (v && typeof v.toJSDate === 'function') remindAt = toLocalInput(v.toJSDate());
+      }
+    }
+  }
+
+  // 标签用标准的 CATEGORIES（别的客户端也认），
+  // 列表是 Tasks Lite 自己的概念，走 X- 属性，不污染标准字段
+  const catsRaw = vtodo.getFirstPropertyValue('categories');
+  const tags = (Array.isArray(catsRaw) ? catsRaw : catsRaw ? String(catsRaw).split(',') : [])
+    .map((s) => String(s).trim())
+    .filter(Boolean);
+  const list = String(vtodo.getFirstPropertyValue('x-taskslite-list') || '').trim();
+
   return {
     uid,
     href,
@@ -297,7 +373,18 @@ function parseTodo(icsText, href, etag) {
     priority, // 1 最高，0 表示无
     due,
     modified,
+    parentUid,
+    rrule,
+    remindAt,
+    tags,
+    list,
   };
+}
+
+/** Date → <input type="datetime-local"> 认的本地时间字符串 */
+function toLocalInput(d) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
 /** 由内部对象生成一份 VEVENT-free 的 VCALENDAR/VTODO 文本 */
@@ -330,8 +417,47 @@ function buildTodoIcs(todo) {
     }
   }
 
+  if (todo.parentUid) {
+    // 注意 ICAL.Property 的构造签名是 (jCal, parent)，不是 (name, value)，
+    // 建属性一律走 addPropertyWithValue 再 setParameter
+    const rel = v.addPropertyWithValue('related-to', todo.parentUid);
+    rel.setParameter('reltype', 'PARENT');
+  }
+
+  if (isValidRrule(todo.rrule)) {
+    try {
+      v.addPropertyWithValue('rrule', ICAL.Recur.fromString(String(todo.rrule).toUpperCase()));
+    } catch (e) {
+      console.error('[ics] RRULE 无法解析，已忽略：', todo.rrule);
+    }
+  } else if (todo.rrule) {
+    console.error('[ics] RRULE 格式不合法，已忽略：', todo.rrule);
+  }
+
+  const list = String(todo.list || '').trim();
+  if (list) v.updatePropertyWithValue('x-taskslite-list', list);
+  const tags = (todo.tags || []).map((s) => String(s).trim()).filter(Boolean);
+  if (tags.length) v.updatePropertyWithValue('categories', tags.join(','));
+
+  if (todo.remindAt) {
+    const m = String(todo.remindAt).match(/^(\d{4})-(\d{2})-(\d{2})(?:[T ](\d{2}):(\d{2}))?/);
+    if (m) {
+      const local = new Date(+m[1], +m[2] - 1, +m[3], +(m[4] || 9), +(m[5] || 0), 0);
+      const alarm = new ICAL.Component('valarm');
+      alarm.addPropertyWithValue('action', 'DISPLAY');
+      alarm.addPropertyWithValue('description', todo.title || '提醒');
+      // addPropertyWithValue → setValue 会按 value.icaltype 自动把类型切成 date-time，
+      // 千万别再手动 resetType，那会把刚设进去的值清空
+      const trig = alarm.addPropertyWithValue('trigger', ICAL.Time.fromJSDate(local, true));
+      trig.setParameter('value', 'DATE-TIME');
+      v.addSubcomponent(alarm);
+    }
+  }
+
   vcal.addSubcomponent(v);
   return vcal.toString();
 }
 
-module.exports = { CaldavClient, parseMultistatus, decodeXml, normalizeBase, buildTodoIcs, parseTodo };
+module.exports = {
+  CaldavClient, parseMultistatus, decodeXml, normalizeBase, buildTodoIcs, parseTodo, toLocalInput,
+};

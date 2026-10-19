@@ -1,7 +1,7 @@
 {
   "name": "tasks-lite",
   "productName": "Tasks Lite",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "本地 CalDAV 待办客户端，直连 Radicale / 任意 CalDAV 服务器",
   "main": "src/main/index.js",
   "type": "commonjs",
@@ -10,7 +10,8 @@
   "scripts": {
     "start": "electron .",
     "dist": "electron-builder --win --x64",
-    "dist:portable": "electron-builder --win portable --x64"
+    "dist:portable": "electron-builder --win portable --x64",
+    "test": "node test/ics-roundtrip.js && node test/store-unit.js && node scripts/check-dom.js"
   },
   "dependencies": {
     "ical.js": "2.2.1"

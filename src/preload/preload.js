@@ -8,9 +8,15 @@ contextBridge.exposeInMainWorld('api', {
   testConnection: () => ipcRenderer.invoke('test-connection'),
   sync: () => ipcRenderer.invoke('sync'),
   saveTask: (todo) => ipcRenderer.invoke('task:save', todo),
-  deleteTask: (uid) => ipcRenderer.invoke('task:delete', uid),
+  trashTask: (uid) => ipcRenderer.invoke('task:trash', uid),
+  restoreTask: (uid) => ipcRenderer.invoke('task:restore', uid),
+  purgeTask: (uid) => ipcRenderer.invoke('trash:purge', uid),
+  emptyTrash: () => ipcRenderer.invoke('trash:empty'),
+  checkReminders: () => ipcRenderer.invoke('reminder:check'),
   toggleTask: (uid, completed) => ipcRenderer.invoke('task:toggle', uid, completed),
   onState: (cb) => ipcRenderer.on('state', (_evt, state) => cb(state)),
   /** 托盘菜单「新建任务」触发，把光标送到新建输入框 */
   onFocusComposer: (cb) => ipcRenderer.on('focus-composer', () => cb()),
+  /** 点提醒通知后主进程会要求打开某条任务 */
+  onOpenTask: (cb) => ipcRenderer.on('open-task', (_evt, uid) => cb(uid)),
 });
