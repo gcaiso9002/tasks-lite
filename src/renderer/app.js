@@ -226,7 +226,8 @@ function buildRow(t, byUid, extraClass) {
     badges.push(`<span class="badge step">☑ ${stepsDone(t)}/${t.steps.length}</span>`);
   }
   if (t.notes) badges.push('<span class="badge note">有备注</span>');
-  if (t.etag === '' && t.href) badges.push('<span class="badge note">待上传</span>');
+  // dirty = 本地改了还没被服务器确认。标出来，用户才知道"加了到底上去了没有"
+  if (t.dirty) badges.push('<span class="badge pending">待上传</span>');
 
   row.innerHTML = `
     <div class="check" data-act="toggle">✓</div>
@@ -574,11 +575,19 @@ function renderSyncState() {
     txt.title = state.sync.error;
     $('btnSync').classList.remove('spin');
   } else {
-    ss.classList.add('ok');
     const ls = state.sync.lastSync ? new Date(state.sync.lastSync) : null;
-    txt.textContent = ls
-      ? `已同步 ${String(ls.getHours()).padStart(2, '0')}:${String(ls.getMinutes()).padStart(2, '0')}`
-      : '未同步';
+    const pending = state.sync.pendingCount || 0;
+    if (pending > 0) {
+      // 有改动还没被服务器收下 —— 说出来，别让用户以为"加了就是加上去了"
+      ss.classList.add('warn');
+      txt.textContent = `待上传 ${pending} 条`;
+      txt.title = '这些改动还没传到服务器，连上网或点一下同步按钮就会补传';
+    } else {
+      ss.classList.add('ok');
+      txt.textContent = ls
+        ? `已同步 ${String(ls.getHours()).padStart(2, '0')}:${String(ls.getMinutes()).padStart(2, '0')}`
+        : '未同步';
+    }
     $('btnSync').classList.remove('spin');
   }
 }

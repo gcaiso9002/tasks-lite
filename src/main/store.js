@@ -55,16 +55,50 @@ class Store {
     return this.data.tasks;
   }
 
-  upsert(todo) {
+  upsert(todo, opts) {
     const i = this.data.tasks.findIndex((t) => t.uid === todo.uid);
-    if (i >= 0) this.data.tasks[i] = Object.assign({}, this.data.tasks[i], todo);
-    else this.data.tasks.push(todo);
+    const next = Object.assign({}, this.data.tasks[i] || {}, todo);
+    // dirty = 这条有还没被服务器确认的本地改动。拉取时不能被服务器版本盖掉。
+    if (opts && opts.dirty) next.dirty = true;
+    if (i >= 0) this.data.tasks[i] = next;
+    else this.data.tasks.push(next);
     this.save();
   }
 
-  upsertMany(list) {
+  /** 服务器已经收下这条改动了，清掉脏标记 */
+  markClean(uid) {
+    const t = this.data.tasks.find((x) => x.uid === uid);
+    if (t && t.dirty) { delete t.dirty; this.save(); }
+  }
+
+  /** 待传队列里涉及的 uid 集合 */
+  pendingUids() {
+    return new Set(this.data.pending.map((op) => op.uid || (op.todo && op.todo.uid)).filter(Boolean));
+  }
+
+  /**
+   * 拉取服务器数据并**合并**进本地。
+   *
+   * 不是覆盖 —— 服务器是权威，但「本地有还没上传的改动」优先级更高：
+   *   - 有待传操作（改了/删了还没传上去）：服务器版本一律不覆盖它，
+   *     只吸收服务器带来的 href / etag，免得下次推送用过期 etag 撞 412。
+   *   - 标了 dirty（本地有改动但队列里已经没有对应操作了）：内容同样以本地为准。
+   * 否则用户改了一半还没传上去，一次全量拉取就把他的改动静默改回去了。
+   */
+  upsertMany(list, pendingUids) {
+    const pend = pendingUids || new Set();
+    const trashed = new Set(this.data.trash.map((t) => t.uid));
     const byUid = new Map(this.data.tasks.map((t) => [t.uid, t]));
-    for (const t of list) byUid.set(t.uid, Object.assign({}, byUid.get(t.uid) || {}, t));
+    for (const t of list) {
+      const local = byUid.get(t.uid);
+      if (pend.has(t.uid) || trashed.has(t.uid) || (local && local.dirty)) {
+        // 本地有未完成的操作：保留本地内容，只更新服务器侧的元信息
+        if (local) byUid.set(t.uid, Object.assign({}, local, { href: t.href, etag: t.etag }));
+        // local 不存在 = 这条是本地删掉但还没传上去的，别让它从服务器"复活"
+        continue;
+      }
+      byUid.set(t.uid, Object.assign({}, byUid.get(t.uid) || {}, t));
+    }
     this.data.tasks = [...byUid.values()];
     this.save();
   }
@@ -86,8 +120,9 @@ class Store {
     this.data.tasks = this.data.tasks.filter((t) => {
       if (keep.has(t.uid)) return true;
       if (pend.has(t.uid)) return true;
-      if (!t.href) return true;
-      return false;
+      if (t.dirty) return true;      // 有没上传的改动，绝不能删
+      if (!t.href) return true;      // 从没上传过，保留
+      return false;                  // 服务器上没了 → 删
     });
     const removed = before - this.data.tasks.length;
     if (removed) this.save();
@@ -159,14 +194,33 @@ class Store {
     this.save();
   }
 
+  /**
+   * 记一次同步完成的时间。
+   *
+   * 注意：**不要**在这里清空 pending 队列。待传操作是逐条管理的 ——
+   * 推送成功才移除那一条。一次性清空等于把还没传上去的改动直接丢掉。
+   */
   markSynced() {
     this.data.lastSync = new Date().toISOString();
-    this.data.pending = [];
     this.save();
   }
 
+  /**
+   * 把一次操作放进待传队列。
+   *
+   * 同一条任务只保留**最新**的一次：离线时反复改同一条，攒五个操作没意义，
+   * 而且老操作带的是过期的 etag，上传时会互相打架（412）。
+   * 最新的一次带的是完整任务内容，直接覆盖掉旧的就行。
+   */
   enqueue(op) {
-    this.data.pending.push(op);
+    const uid = op.uid || (op.todo && op.todo.uid);
+    if (uid) {
+      const i = this.data.pending.findIndex((x) => (x.uid || (x.todo && x.todo.uid)) === uid);
+      if (i >= 0) this.data.pending[i] = op;
+      else this.data.pending.push(op);
+    } else {
+      this.data.pending.push(op);
+    }
     this.save();
   }
 }

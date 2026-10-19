@@ -49,7 +49,13 @@ function snapshot() {
     lists: collectLists(),
     tags: collectTags(),
     config: cfg,
-    sync: Object.assign({}, syncState, { lastSync: store.data.lastSync }),
+    sync: Object.assign({}, syncState, {
+      lastSync: store.data.lastSync,
+      // 还有多少条改动没被服务器收下。界面上要显示出来，
+      // 用户才能知道"我加的东西到底上去了没有"。
+      pendingCount: store.data.pending.length,
+      dirtyCount: store.tasks.filter((t) => t.dirty).length,
+    }),
   };
 }
 
@@ -128,12 +134,16 @@ async function runSync(reason = 'manual') {
     const client = makeClient();
     const cal = await ensureCalendar(client);
 
-    // 1) 先把本地排队（之前离线时）的操作推上去
+    // 1) 先把本地排队（之前离线时）的操作推上去。
+    //    推成功一条就移除一条；推不上去的**留在队列里**等下一轮，
+    //    绝不能丢 —— 丢掉等于用户的改动凭空消失。
+    let pushFailed = 0;
     for (const op of store.data.pending.slice()) {
       try {
         if (op.op === 'put') {
           const r = await client.putTodoResilient(cal.href, op.todo, op.baseEtag);
           store.upsert(Object.assign({}, op.todo, { href: r.href, etag: r.etag }));
+          store.markClean(op.todo.uid);
         } else if (op.op === 'delete') {
           await client.deleteTodoResilient(op.href, op.etag);
           store.remove(op.uid);
@@ -142,26 +152,25 @@ async function runSync(reason = 'manual') {
         if (i >= 0) store.data.pending.splice(i, 1);
         store.save();
       } catch (e) {
-        // 409/412 说明服务端版本更新了，放弃这次推送，等下面第 2 步 pull 覆盖。
-        // （412 正常已经被 putTodoResilient 重试掉了，走到这里是连续冲突。）
+        pushFailed++;
+        // 单条失败不影响后面的操作，继续往下走
         if (e.status === 409 || e.status === 412) {
-          const i = store.data.pending.indexOf(op);
-          if (i >= 0) store.data.pending.splice(i, 1);
-          store.save();
+          console.warn(`[sync] ${op.op} 冲突(${e.status})，保留在待传队列，下轮重试`);
         } else {
-          throw e;
+          console.error('[sync] 待传操作失败，保留在队列：', e.message);
         }
       }
     }
 
     // 2) 全量拉取，服务端是权威
     const remote = await client.listTodos(cal.href);
-    store.upsertMany(remote);
+    // 拉取是"合并"不是"覆盖"：有待传操作或标了 dirty 的任务，服务器版本不能盖它
+    const pendUids = store.pendingUids();
+    store.upsertMany(remote, pendUids);
     // 服务器上已经没了的（别的客户端删掉的），本地也要跟着消失
-    const pendUids = new Set(store.data.pending.map((op) => op.uid || (op.todo && op.todo.uid)).filter(Boolean));
     const pruned = store.pruneMissing(new Set(remote.map((t) => t.uid)), pendUids);
     store.markSynced();
-    console.log(`[sync] ${reason} 完成，拉到 ${remote.length} 条，待传队列剩 ${store.data.pending.length}${pruned ? `，清理掉服务器上已删除的 ${pruned} 条` : ''}`);
+    console.log(`[sync] ${reason} 完成，拉到 ${remote.length} 条，待传队列剩 ${store.data.pending.length}${pruned ? `，清理掉服务器上已删除的 ${pruned} 条` : ''}${pushFailed ? `，${pushFailed} 条推送失败已留队` : ''}`);
 
     return { ok: true, pulled: remote.length };
   } catch (e) {
@@ -194,6 +203,32 @@ function scheduleSyncSoon() {
   }, 1200);
 }
 
+/**
+ * 推送失败后的退避重试。
+ *
+ * 网络一恢复就该把待传的改动补上去，而不是干等下一个同步周期
+ * （默认 10 分钟，那也太久了）。10 秒起步，每次失败翻倍，封顶 5 分钟。
+ */
+let retryTimer = null;
+let retryDelay = 10000;
+function scheduleRetry() {
+  if (retryTimer) return;
+  retryTimer = setTimeout(async () => {
+    retryTimer = null;
+    const r = await runSync('retry');
+    if (r && r.ok && !store.data.pending.length) retryDelay = 10000;
+    else retryDelay = Math.min(retryDelay * 2, 300000);
+  }, retryDelay);
+}
+
+/**
+ * 推一条改动到服务器。
+ *
+ * 失败时**必须**把本地版本留下来（标 dirty），原因：
+ *   - 不留的话，这条任务只在待传队列里，界面里根本不显示，用户以为没加上；
+ *   - 而且下一次全量拉取会用服务器版本覆盖它，改动直接消失。
+ * 留 dirty 之后，拉取会绕开它，等下次推送成功再清标记。
+ */
 async function pushOrQueue(op, clientFn) {
   try {
     const client = makeClient();
@@ -204,11 +239,17 @@ async function pushOrQueue(op, clientFn) {
     // 删除类操作要真的从本地移除。之前这里一律 upsert，
     // 删除成功后会往 tasks 里塞一条只剩 uid 的空壳，下次同步又"复活"它。
     if (op.op === 'delete') store.remove(r.uid);
-    else store.upsert(r);
+    else {
+      store.upsert(r);
+      store.markClean(r.uid);
+    }
     return { ok: true };
   } catch (e) {
+    if (op.op === 'put') store.upsert(op.todo, { dirty: true });
     store.enqueue(op);
     console.error('[push] 入队等待下次同步：', e.message);
+    broadcast();
+    scheduleRetry();
     return { ok: true, queued: true, error: e.message };
   }
 }
@@ -447,6 +488,7 @@ function createTray() {
 function quitApp() {
   isQuitting = true;
   if (addSyncTimer) clearTimeout(addSyncTimer);
+  if (retryTimer) clearTimeout(retryTimer);
   globalShortcut.unregisterAll();
   app.quit();
 }
@@ -497,6 +539,12 @@ function registerIpc() {
     const isNew = !t.uid;
     if (!t.uid) t.uid = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}@taskslite`;
     const calHref = store.data.calendarHref;
+
+    // 本地优先：先落本地库并标脏，界面立刻就能看到这条改动，
+    // 然后才去推服务器。推失败也不怕 —— 它已经是本地数据了，只是标着待上传。
+    store.upsert(t, { dirty: true });
+    broadcast();
+
     const r = await pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
       const href = calHref || (await ensureCalendar(client)).href;
       const r2 = await client.putTodoResilient(href, t, t.etag || null);
@@ -540,6 +588,9 @@ function registerIpc() {
   ipcMain.handle('task:restore', async (_e, uid) => {
     const t = store.restoreFromTrash(uid);
     if (!t) return { ok: true };
+    // 本地优先：先放回列表里标脏，再推服务器
+    store.upsert(t, { dirty: true });
+    broadcast();
     await pushOrQueue({ op: 'put', todo: t, baseEtag: null }, async (client) => {
       const href = store.data.calendarHref || (await ensureCalendar(client)).href;
       const r = await client.putTodoResilient(href, t, null);
@@ -631,7 +682,8 @@ function registerIpc() {
     const t = store.get(uid);
     if (!t) return { ok: false };
     t.completed = !!completed;
-    store.upsert(t);
+    // 本地优先：先落库标脏，界面立刻生效
+    store.upsert(t, { dirty: true });
     broadcast();
     if (completed) {
       showSystemNotification({ title: '任务完成', body: t.title || '(无标题)' });
@@ -650,7 +702,7 @@ function registerIpc() {
     const t = store.get(uid);
     if (!t) return { ok: false };
     t.myDay = on ? todayYmd() : '';
-    store.upsert(t);
+    store.upsert(t, { dirty: true });
     broadcast();
     return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
       const r = await client.putTodoResilient(store.data.calendarHref, t, t.etag || null);
@@ -699,7 +751,9 @@ async function rolloverRecurring(t) {
     steps: [],                       // 上一步做完了，新的一轮重新开始
     createdFrom: t.uid,
   });
-  store.upsert(nextTodo);
+  // 本地优先：先落本地库标脏，界面立刻能看到下一期
+  store.upsert(nextTodo, { dirty: true });
+  broadcast();
   await pushOrQueue({ op: 'put', todo: nextTodo, baseEtag: null }, async (client) => {
     const href = store.data.calendarHref || (await ensureCalendar(client)).href;
     const r = await client.putTodoResilient(href, nextTodo, null);
@@ -764,7 +818,7 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.4.0',
+            message: 'Tasks Lite 1.5.0',
             detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
                     + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
                     + `全局快捷键 ${GLOBAL_TOGGLE}`,

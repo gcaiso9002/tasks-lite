@@ -45,10 +45,11 @@ jobs:
         run: node scripts/check-dom.js
 
       - name: Unit tests
-        # 纯本地，不联网：ICS 字段往返 + 缓存层回收站/提醒 + 快速添加解析与 RRULE + 412 冲突自愈
+        # 纯本地，不联网：ICS 字段往返 + 缓存层回收站/提醒 + 同步模型 + 快速添加解析/RRULE + 412 冲突自愈
         run: |
           node test/ics-roundtrip.js
           node test/store-unit.js
+          node test/sync-model-unit.js
           node test/parse-and-rrule.js
           node test/conflict-unit.js
 

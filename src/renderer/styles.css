@@ -144,6 +144,9 @@ body { display: flex; flex-direction: column; }
 .sync-state.syncing .dot { background: var(--accent); animation: pulse 1s infinite; }
 .sync-state.err .dot { background: var(--danger); }
 .sync-state.err .txt { color: var(--danger); }
+/* 有改动还没被服务器收下 —— 黄色提醒，别让用户以为已经同步好了 */
+.sync-state.warn .dot { background: var(--warn); }
+.sync-state.warn .txt { color: var(--warn); }
 @keyframes pulse { 50% { opacity: .25; } }
 
 .icon-btn {
@@ -228,6 +231,8 @@ body { display: flex; flex-direction: column; }
 .badge.overdue { color: var(--danger); background: var(--danger-bg); }
 .badge.today { color: var(--warn); background: var(--warn-bg); }
 .badge.note { color: var(--fg-dim); background: var(--bg-3); }
+/* 待上传：本地改了还没到服务器 */
+.badge.pending { color: var(--warn); background: var(--warn-bg); }
 .badge.repeat { color: var(--accent); background: var(--accent-soft); }
 .badge.remind { color: var(--warn); background: var(--warn-bg); }
 .badge.tag { color: var(--ok); background: var(--ok-bg); }
