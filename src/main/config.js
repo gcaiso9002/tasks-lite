@@ -11,9 +11,10 @@ const { safeStorage } = require('electron');
 class Config {
   constructor(userDataDir) {
     this.file = path.join(userDataDir, 'config.json');
+    // 首次启动的占位默认值，用户在设置面板里改成自己的服务器
     this.data = {
-      server: 'https://caldav.gcaiso9002.xin/zx/',
-      username: 'zx',
+      server: '',
+      username: '',
       password: '',
       syncIntervalMin: 5,
     };

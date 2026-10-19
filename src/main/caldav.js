@@ -12,7 +12,7 @@ class CaldavClient {
   /**
    * @param {object} opts
    * @param {Function} opts.fetchImpl  (url, init) => Promise<Response>，通常是 Electron net.fetch
-   * @param {string}  opts.baseUrl      用户填的入口地址，例如 https://caldav.gcaiso9002.xin/zx/
+   * @param {string}  opts.baseUrl      用户填的入口地址，例如 https://caldav.example.com/用户名/
    * @param {string}  opts.username
    * @param {string}  opts.password
    */

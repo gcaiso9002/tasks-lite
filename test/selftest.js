@@ -6,8 +6,8 @@
  *
  * 凭据一律从环境变量读，仓库里不落任何密码：
  *   PowerShell:
- *     $env:CALDAV_URL='https://caldav.gcaiso9002.xin/zx/'
- *     $env:CALDAV_USER='zx'
+ *     $env:CALDAV_URL='https://caldav.example.com/你的用户名/'
+ *     $env:CALDAV_USER='你的用户名'
  *     $env:CALDAV_PASS='你的密码'
  *     node test/selftest.js
  */
