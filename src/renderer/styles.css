@@ -305,6 +305,23 @@ body { display: flex; flex-direction: column; }
 .test-result.ok { color: var(--ok); }
 .test-result.err { color: var(--danger); }
 
+/* 连接诊断输出 */
+.diag-box {
+  margin-top: 12px; padding: 11px 13px; border-radius: 8px;
+  background: var(--bg-3); border: 1px solid var(--line);
+  font: 12px/1.8 Consolas, "Microsoft YaHei", monospace; color: var(--fg-dim);
+  white-space: pre-wrap; word-break: break-all;
+}
+.diag-box[hidden] { display: none; }
+.diag-box.ok { border-color: var(--ok); color: var(--ok); }
+.diag-box.err { border-color: var(--danger); color: var(--danger); }
+.field select {
+  width: 100%; padding: 9px 11px; background: var(--bg-3);
+  border: 1px solid var(--line); border-radius: 8px; color: var(--fg);
+  color-scheme: inherit; outline: none;
+}
+.field select:focus { border-color: var(--accent); }
+
 /* 开关行 */
 .switch-row {
   display: flex; align-items: flex-start; gap: 10px;

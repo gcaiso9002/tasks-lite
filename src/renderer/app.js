@@ -547,9 +547,11 @@ function openSettings() {
   $('cfgPass').value = '';
   $('cfgPass').placeholder = c.hasPassword ? '已保存（留空表示不修改）' : '未设置';
   $('cfgInterval').value = c.syncIntervalMin || 10;
+  $('cfgProxy').value = c.proxyMode === 'system' ? 'system' : 'direct';
   $('cfgAutoLaunch').checked = !!c.autoLaunch;
   $('cfgAccent').value = /^#[0-9a-f]{6}$/i.test(c.accent || '') ? c.accent : ACCENT_DEFAULT;
   syncAppearanceUI();
+  $('diagBox').hidden = true;
   $('testResult').textContent = '';
   $('testResult').className = 'test-result';
   $('settings').hidden = false;
@@ -618,6 +620,7 @@ $('btnSaveCfg').addEventListener('click', async () => {
     server: $('cfgServer').value.trim(),
     username: $('cfgUser').value.trim(),
     syncIntervalMin: Number($('cfgInterval').value) || 10,
+    proxyMode: $('cfgProxy').value,
     autoLaunch: $('cfgAutoLaunch').checked,
   };
   const pw = $('cfgPass').value;
@@ -651,6 +654,19 @@ $('btnTest').addEventListener('click', async () => {
     el.className = 'test-result err';
     el.textContent = '失败：' + r.error;
   }
+});
+
+// ---------------- 连接诊断 ----------------
+
+$('btnDiag').addEventListener('click', async () => {
+  const box = $('diagBox');
+  box.hidden = false;
+  box.textContent = '诊断中…';
+  box.className = 'diag-box';
+  const r = await window.api.netDiag();
+  box.className = 'diag-box ' + (r.ok ? 'ok' : 'err');
+  const lines = (r.lines || []).map((l) => `<div>${escapeHtml(l)}</div>`).join('');
+  box.innerHTML = lines;
 });
 
 // ---------------- 快捷键 ----------------

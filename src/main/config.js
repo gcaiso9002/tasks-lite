@@ -22,6 +22,8 @@ class Config {
       theme: 'system',
       // 自定义强调色（十六进制），空字符串表示用默认蓝
       accentColor: '',
+      // 连接方式：'direct' 直连（默认）| 'system' 跟随系统代理
+      proxyMode: 'direct',
     };
     this.load();
   }
@@ -94,6 +96,7 @@ class Config {
       autoLaunch: !!this.data.autoLaunch,
       theme: this.data.theme,
       accentColor: this.data.accentColor,
+      proxyMode: this.data.proxyMode,
     };
   }
 }

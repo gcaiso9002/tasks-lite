@@ -153,6 +153,15 @@
         <input id="cfgInterval" type="number" min="1" max="120" />
       </label>
 
+      <label class="field">
+        <span>连接方式</span>
+        <select id="cfgProxy">
+          <option value="direct">直连（不走系统代理）</option>
+          <option value="system">跟随系统代理</option>
+        </select>
+        <small>自建服务器一般都能直连，绕代理既慢又会引入代理自己的错误状态（遇到过 402）。只有当服务器<strong>必须经代理才能访问</strong>时才选「跟随系统代理」。</small>
+      </label>
+
       <label class="switch-row">
         <input id="cfgAutoLaunch" type="checkbox" />
         <span>开机自动启动<small>开机后直接进托盘，不弹窗口（全局快捷键 Ctrl+Shift+T 唤起）</small></span>
@@ -193,9 +202,12 @@
       <div class="modal-foot">
         <span id="testResult" class="test-result"></span>
         <span class="spacer"></span>
+        <button id="btnDiag" class="ghost">诊断连接</button>
         <button id="btnTest" class="ghost">测试连接</button>
         <button id="btnSaveCfg" class="primary">保存</button>
       </div>
+
+      <div id="diagBox" class="diag-box" hidden></div>
     </div>
   </div>
 

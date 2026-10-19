@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, Tray, Menu, ipcMain, dialog, Notification, net, globalShortcut, nativeTheme,
+  app, BrowserWindow, Tray, Menu, ipcMain, dialog, Notification, net, globalShortcut, nativeTheme, session,
 } = require('electron');
 const path = require('path');
 const crypto = require('crypto');
@@ -249,6 +249,26 @@ function openTaskInWindow(uid) {
 
 // ================================================================ 开机自启
 
+/**
+ * 连接方式。
+ *
+ * Electron 的 net.fetch 走 Chromium 网络栈，会自动套用 Windows 的系统代理。
+ * 本机系统代理指向 127.0.0.1:6696（AtlasCore），而自建 CalDAV 服务器本来就能直连，
+ * 让它绕一圈代理既慢又会引入代理自己的错误状态（遇到过 402）。
+ * 所以默认 direct：整个网络栈都不走代理。需要经代理才能访问的服务器再手动切回去。
+ */
+function applyProxyMode() {
+  const mode = config.data.proxyMode === 'system' ? 'system' : 'direct';
+  try {
+    session.defaultSession.setProxy(
+      mode === 'direct' ? { mode: 'direct' } : { mode: 'system' }
+    );
+    console.log(`[proxy] 连接方式 = ${mode === 'direct' ? '直连（不走系统代理）' : '跟随系统代理'}`);
+  } catch (e) {
+    console.error('[proxy] 设置失败：', e.message);
+  }
+}
+
 function applyAutoLaunch() {
   try {
     app.setLoginItemSettings({
@@ -367,6 +387,7 @@ function registerIpc() {
       theme: config.data.theme,
       accent: config.data.accentColor,
       interval: config.data.syncIntervalMin,
+      proxy: config.data.proxyMode,
     };
     config.update(patch || {});
     if (patch && patch.password === '') config.update({ password: '' });
@@ -374,6 +395,7 @@ function registerIpc() {
     // 外观即时生效，不必等用户点「保存」
     if (config.data.theme !== before.theme || config.data.accentColor !== before.accent) applyTheme();
     if (config.data.syncIntervalMin !== before.interval) scheduleAutoSync();
+    if (config.data.proxyMode !== before.proxy) applyProxyMode();
     broadcast();
     return snapshot().config;
   });
@@ -462,6 +484,59 @@ function registerIpc() {
 
   /** 手动扫一遍到点的提醒，设置完想立刻看到效果时用 */
   ipcMain.handle('reminder:check', () => ({ fired: checkReminders() }));
+
+  /**
+   * 连接诊断：把「请求到底走没走代理、服务器回了什么」摊开给用户看。
+   * 之前只显示一个状态码，出了 402 这种来自中间层而不是服务器的状态码，
+   * 用户既看不出是谁挡的也不知道下一步该做什么。
+   */
+  ipcMain.handle('net:diag', async () => {
+    const target = config.data.server || '';
+    const out = { mode: config.data.proxyMode === 'system' ? '跟随系统代理' : '直连' };
+    if (!target) {
+      out.ok = false;
+      out.lines = ['还没填服务器地址'];
+      return out;
+    }
+    try {
+      out.resolved = await session.defaultSession.resolveProxy(target);
+    } catch (e) {
+      out.resolved = `（取不到：${e.message}）`;
+    }
+    let host = '';
+    try { host = new URL(target).host; } catch (e) { host = target; }
+    out.host = host;
+
+    const t0 = Date.now();
+    try {
+      const client = makeClient();
+      const { calendars } = await client.discover();
+      out.ms = Date.now() - t0;
+      out.ok = true;
+      out.status = '207 Multi-Status（CalDAV 正常应答）';
+      out.lines = [
+        `服务器：${host}`,
+        `连接方式：${out.mode}`,
+        `实际路由：${out.resolved}`,
+        `应答：${out.status}，耗时 ${out.ms} ms`,
+        `发现 ${calendars.length} 个日历：${calendars.map((c) => c.name).join('、') || '无'}`,
+      ];
+    } catch (e) {
+      out.ms = Date.now() - t0;
+      out.ok = false;
+      out.status = String(e.status || '—');
+      out.lines = [
+        `服务器：${host}`,
+        `连接方式：${out.mode}`,
+        `实际路由：${out.resolved}`,
+        `失败：${e.message}`,
+      ];
+      if ([402, 407].includes(e.status)) {
+        out.lines.push('这个状态码不像服务器自己返回的，多半是代理层给的 —— 把「连接方式」改成「直连」再试。');
+      }
+    }
+    return out;
+  });
 
   ipcMain.handle('task:toggle', async (_e, uid, completed) => {
     const t = store.get(uid);
@@ -555,6 +630,7 @@ if (!gotLock) {
     // 主题跟随系统时，系统切换深浅色会触发 updated，这里重新广播给渲染进程
     nativeTheme.on('updated', applyTheme);
     applyTheme();
+    applyProxyMode();
 
     registerIpc();
     buildMenu();

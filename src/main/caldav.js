@@ -43,10 +43,16 @@ class CaldavClient {
       : '';
 
     if (!res.ok && res.status !== 207) {
+      let host = '';
+      try { host = new URL(url).host; } catch (e) { host = url; }
       const err = new Error(
         res.status === 401
           ? '认证失败：用户名或密码不对'
-          : `服务器返回 ${res.status} ${res.statusText}`
+          // 402/407 是代理层特有的状态码，服务器本身不会返回。
+          // 只报一个数字的话，用户既不知道是被谁挡的，也不知道该改什么。
+          : res.status === 402 || res.status === 407
+            ? `${res.status}：请求被中间的代理拦住了（${host}）。到设置里把「连接方式」改成「直连」`
+            : `服务器返回 ${res.status} ${res.statusText}（${host}）`
       );
       err.status = res.status;
       throw err;
