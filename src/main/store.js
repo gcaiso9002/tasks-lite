@@ -56,6 +56,21 @@ class Store {
   }
 
   upsert(todo, opts) {
+    // 已经在回收站里的任务，不许被重新塞回任务列表。
+    //
+    // 典型场景：断网时新建一条 → 顺手删进回收站 → 网络恢复。
+    // 待传队列里那条 put 操作这时被重放成功了，store.upsert 一执行，
+    // 删掉的任务就"复活"回到列表里，而且它是真的被 PUT 回服务器的。
+    // 挡在这里比在每个调用点判断可靠 —— 复活这条路必须堵死。
+    const trashed = this.data.trash.find((t) => t.uid === todo.uid);
+    if (trashed) {
+      // 服务器信息（href/etag）还是要更新，将来从回收站恢复时用得上
+      if (todo.href) trashed.href = todo.href;
+      if (todo.etag) trashed.etag = todo.etag;
+      if (opts && opts.dirty) trashed.dirty = true;
+      this.save();
+      return;
+    }
     const i = this.data.tasks.findIndex((t) => t.uid === todo.uid);
     const next = Object.assign({}, this.data.tasks[i] || {}, todo);
     // dirty = 这条有还没被服务器确认的本地改动。拉取时不能被服务器版本盖掉。
@@ -65,10 +80,30 @@ class Store {
     this.save();
   }
 
+  /**
+   * 撤掉某个任务的待传操作。
+   *
+   * 用在"这条已经不需要传上去了"的地方：比如一条从没传上去过的新任务
+   * 被删进回收站 —— 服务器上根本没有它，队列里那条 put 就是多余的，
+   * 不撤掉的话网络一恢复它还会被推上去。
+   */
+  removePending(uid) {
+    const before = this.data.pending.length;
+    this.data.pending = this.data.pending.filter((op) => (op.uid || (op.todo && op.todo.uid)) !== uid);
+    const removed = before - this.data.pending.length;
+    if (removed) this.save();
+    return removed;
+  }
+
   /** 服务器已经收下这条改动了，清掉脏标记 */
   markClean(uid) {
     const t = this.data.tasks.find((x) => x.uid === uid);
-    if (t && t.dirty) { delete t.dirty; this.save(); }
+    const tr = this.data.trash.find((x) => x.uid === uid);
+    if ((t && t.dirty) || (tr && tr.dirty)) {
+      if (t) delete t.dirty;
+      if (tr) delete tr.dirty;
+      this.save();
+    }
   }
 
   /** 待传队列里涉及的 uid 集合 */
@@ -166,12 +201,20 @@ class Store {
     return t;
   }
 
+  /**
+   * 从回收站彻底删掉。
+   *
+   * 连同待传队列里这条的操作一起撤掉：它已经被用户判定为"不要了"，
+   * 留着的话网络一恢复它还会被推回服务器，再下一次同步时冒回列表里。
+   */
   purgeFromTrash(uid) {
     this.data.trash = this.data.trash.filter((t) => t.uid !== uid);
+    this.removePending(uid);
     this.save();
   }
 
   emptyTrash() {
+    for (const t of this.data.trash) this.removePending(t.uid);
     this.data.trash = [];
     this.save();
   }

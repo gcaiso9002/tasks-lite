@@ -577,6 +577,12 @@ function registerIpc() {
         await client.deleteTodoResilient(t.href, t.etag || null);
         return { uid };
       });
+    } else {
+      // 从来没传上去过（断网时新建的）：服务器上根本没有这条，
+      // 不用发 delete，但**必须**把待传队列里那条 put 撤掉。
+      // 不撤的话，网络一恢复，待传队列重放 put 会把这条已经删掉的任务
+      // 重新塞回任务列表，还会被真的 PUT 回服务器 —— 删掉的任务复活了。
+      store.removePending(uid);
     }
     delete store.data.reminded[uid];
     store.save();

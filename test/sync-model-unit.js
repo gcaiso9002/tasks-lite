@@ -86,5 +86,46 @@ assert.ok(s.data.pending.length > 0, 'markSynced 绝不能清空待传队列，�
 assert.ok(s.data.lastSync, 'lastSync 还是要记的');
 console.log('  ✅ markSynced 只记时间，不清空待传队列');
 
+// ---------------------------------------------------------------- 8) 回收站里的任务不许复活
+// 复现过的真 bug：断网时新建一条 → 删进回收站 → 网络恢复，
+// 待传队列里那条 put 被重放成功，任务被重新塞回列表（还会被真的 PUT 回服务器）。
+s.upsert({ uid: 'i', title: '离线新建的', etag: '', href: '' }, { dirty: true });
+s.enqueue({ op: 'put', todo: { uid: 'i', title: '离线新建的' }, baseEtag: null });
+s.moveToTrash('i');
+// 模拟待传队列重放成功：服务器返回了 href/etag
+s.upsert({ uid: 'i', title: '离线新建的', etag: 'eI', href: HREF('i') });
+assert.strictEqual(s.get('i'), undefined, '回收站里的任务不能被重新塞回任务列表');
+assert.ok(s.trash.find((t) => t.uid === 'i'), '回收站里应该还留着这条');
+assert.strictEqual(s.trash.find((t) => t.uid === 'i').href, HREF('i'), '回收站副本要记下服务器信息');
+console.log('  ✅ 回收站里的任务不会被 upsert 复活');
+
+// ---------------------------------------------------------------- 9) 删除时要撤掉待传操作
+s.upsert({ uid: 'j', title: '要删掉的', etag: '', href: '' }, { dirty: true });
+s.enqueue({ op: 'put', todo: { uid: 'j', title: '要删掉的' }, baseEtag: null });
+s.moveToTrash('j');
+s.removePending('j');
+assert.strictEqual(s.data.pending.filter((o) => (o.todo && o.todo.uid) === 'j').length, 0,
+  '删除后待传队列里不该还留着这条的 put，否则网络一恢复它又会上传');
+console.log('  ✅ 删除任务会撤掉待传队列里的操作');
+
+// ---------------------------------------------------------------- 10) 彻底删除同样要撤掉
+s.upsert({ uid: 'k', title: '彻底删掉的', etag: '', href: '' }, { dirty: true });
+s.enqueue({ op: 'put', todo: { uid: 'k', title: '彻底删掉的' }, baseEtag: null });
+s.moveToTrash('k');
+s.purgeFromTrash('k');
+assert.strictEqual(s.get('k'), undefined, '彻底删除后列表里不该有它');
+assert.strictEqual(s.data.pending.filter((o) => (o.todo && o.todo.uid) === 'k').length, 0,
+  '彻底删除后待传队列里不能还留着这条，否则同步时它会冒回列表');
+console.log('  ✅ 彻底删除会撤掉待传队列里的操作');
+
+// ---------------------------------------------------------------- 11) 清空回收站也要撤掉
+s.upsert({ uid: 'l', title: '清空回收站前的', etag: '', href: '' }, { dirty: true });
+s.enqueue({ op: 'put', todo: { uid: 'l', title: '清空回收站前的' }, baseEtag: null });
+s.moveToTrash('l');
+s.emptyTrash();
+assert.strictEqual(s.data.pending.filter((o) => (o.todo && o.todo.uid) === 'l').length, 0,
+  '清空回收站后待传队列里不能还留着这些操作');
+console.log('  ✅ 清空回收站会撤掉待传队列里的操作');
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('全部通过');
