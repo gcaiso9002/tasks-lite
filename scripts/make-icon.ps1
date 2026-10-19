@@ -1,9 +1,15 @@
 ﻿$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$root = 'C:\Users\gcais\.minimax\sessions\mvs_e438193d1a894ff2bb5283df48485a30\workspace\tasks-lite'
+# 从脚本自身位置推导仓库根目录。
+# 以前这里写的是开发机的绝对路径，结果 Actions 上 build 目录被建到别处、
+# assets 目录压根不存在，托盘图标一 Save 就报 GDI+ 错误；
+# 而且绝对路径会把开发机用户名泄进公开仓库。
+$root = Split-Path -Parent $PSScriptRoot
 $out = Join-Path $root 'build'
+$assets = Join-Path $root 'assets'
 New-Item -ItemType Directory -Force -Path $out | Out-Null
+New-Item -ItemType Directory -Force -Path $assets | Out-Null
 
 function New-TaskIcon([int]$size, [string]$file) {
     $bmp = New-Object System.Drawing.Bitmap $size, $size
