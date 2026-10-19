@@ -13,6 +13,7 @@ contextBridge.exposeInMainWorld('api', {
   purgeTask: (uid) => ipcRenderer.invoke('trash:purge', uid),
   emptyTrash: () => ipcRenderer.invoke('trash:empty'),
   checkReminders: () => ipcRenderer.invoke('reminder:check'),
+  testNotification: () => ipcRenderer.invoke('notify:test'),
   netDiag: () => ipcRenderer.invoke('net:diag'),
   toggleTask: (uid, completed) => ipcRenderer.invoke('task:toggle', uid, completed),
   toggleMyDay: (uid, on) => ipcRenderer.invoke('task:myday', uid, on),

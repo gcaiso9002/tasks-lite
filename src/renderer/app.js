@@ -386,6 +386,7 @@ function renderCalendar(cal) {
       const day = ymdOf(d);
       const col = document.createElement('div');
       col.className = 'cal-col' + (day === todayStr() ? ' today' : '');
+      col.dataset.day = day;
       const h = document.createElement('div');
       h.className = 'cal-col-head';
       h.textContent = `${m + 1}/${d.getDate()} 周${WEEK_HEAD[i]}`;
@@ -397,6 +398,17 @@ function renderCalendar(cal) {
         e.textContent = '无';
         col.appendChild(e);
       }
+      // 周视图的 + 放在列底部（一直可见），月视图的是格子右上角（悬停才出现）
+      const addBtn = document.createElement('button');
+      addBtn.className = 'cal-add cal-add-bottom';
+      addBtn.type = 'button';
+      addBtn.title = '在这一天加一条待办';
+      addBtn.textContent = '+ 加一条';
+      addBtn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        openCalAdd(col, day, calAdd && calAdd.day === day ? calAdd.value : '');
+      });
+      col.appendChild(addBtn);
       grid.appendChild(col);
     }
     cal.appendChild(grid);
@@ -420,6 +432,7 @@ function renderCalendar(cal) {
       const day = ymdOf(d);
       const cell = document.createElement('div');
       cell.className = 'cal-cell';
+      cell.dataset.day = day;
       if (d.getMonth() !== m) cell.classList.add('out');
       if (day === todayStr()) cell.classList.add('today');
       if (dayFilter === day) cell.classList.add('sel');
@@ -442,17 +455,19 @@ function renderCalendar(cal) {
       }
       // 点空白处筛这一天，点任务条开编辑区 —— 用 target 判断，别抢任务条的点击
       cell.addEventListener('click', (e) => {
-        if (e.target.closest('.cal-chip')) return;
+        if (e.target.closest('.cal-chip') || e.target.closest('.cal-add') || e.target.closest('.cal-add-wrap')) return;
         dayFilter = dayFilter === day ? '' : day;
         view = dayFilter ? 'tasks' : 'calendar';
         filter = 'all';
         document.querySelectorAll('.filter').forEach((x) => x.classList.remove('active'));
         render();
       });
+      attachCalAdd(cell, day);
       grid.appendChild(cell);
     }
     cal.appendChild(grid);
   }
+  restoreCalAdd();
   renderSidebar();
   renderSyncState();
 }
@@ -613,6 +628,95 @@ function addTask() {
     notes: '',
     steps: [],
   });
+}
+
+// ---------------- 日历里就地加待办 ----------------
+//
+// 日历格子点空白原本是"筛这一天"。这里再加一个 + 按钮，点它就在格子里
+// 冒一个输入框，回车直接在那一天建一条待办，不用切回列表视图。
+//
+// 有个坑：每次同步完成整个日历都会重建，正在输入的内容会被冲掉。
+// 所以把"正在编辑哪一天、输入了什么"记在 calAdd 里，重建后原样恢复。
+
+let calAdd = null;   // { day, value }
+
+function calCellOf(day) {
+  return document.querySelector(`.cal-cell[data-day="${day}"]`)
+    || document.querySelector(`.cal-col[data-day="${day}"]`);
+}
+
+/** 在格子里开一个输入框；value 非空时是恢复上一次被打断的输入 */
+function openCalAdd(host, day, value) {
+  if (!host) return;
+  const box = document.createElement('div');
+  box.className = 'cal-add-wrap';
+  const input = document.createElement('input');
+  input.className = 'cal-add-input';
+  input.type = 'text';
+  input.value = value || '';
+  input.placeholder = '加一条待办…';
+  const hint = document.createElement('div');
+  hint.className = 'cal-add-hint';
+  hint.textContent = '回车创建 · Esc 取消';
+  box.appendChild(input);
+  box.appendChild(hint);
+  host.appendChild(box);
+  calAdd = { day, value: value || '' };
+  input.focus();
+  if (value) input.setSelectionRange(value.length, value.length);
+
+  const close = () => {
+    if (calAdd && calAdd.day === day && calAdd.value === input.value) calAdd = null;
+    box.remove();
+  };
+  input.addEventListener('input', () => { if (calAdd) calAdd.value = input.value; });
+  input.addEventListener('keydown', async (e) => {
+    e.stopPropagation();
+    if (e.key === 'Escape') { close(); return; }
+    if (e.key !== 'Enter') return;
+    const raw = input.value.trim();
+    if (!raw) { close(); return; }
+    const p = parseQuickInput(raw);
+    // 句子里自己写了日期就用句子的，否则用格子里的那天
+    await window.api.saveTask({
+      title: p.title || raw,
+      priority: p.priority || 0,
+      due: p.due || day,
+      remindAt: p.remindAt || '',
+      rrule: p.rrule || '',
+      tags: p.tags,
+      list: p.list || '',
+      notes: '',
+      steps: [],
+    });
+    close();
+    toast('已添加到 ' + day);
+  });
+  input.addEventListener('click', (e) => e.stopPropagation());
+  input.addEventListener('blur', () => { if (!input.value.trim()) close(); });
+}
+
+/** 日历重建后，把被打断的输入框恢复回去 */
+function restoreCalAdd() {
+  if (!calAdd) return;
+  const host = calCellOf(calAdd.day);
+  if (!host) { calAdd = null; return; }
+  if (host.querySelector('.cal-add-input')) return;
+  openCalAdd(host, calAdd.day, calAdd.value);
+}
+
+/** 给格子挂一个 + 按钮 */
+function attachCalAdd(host, day) {
+  const btn = document.createElement('button');
+  btn.className = 'cal-add';
+  btn.type = 'button';
+  btn.title = '在这一天加一条待办';
+  btn.textContent = '+';
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    openCalAdd(host, day, calAdd && calAdd.day === day ? calAdd.value : '');
+  });
+  host.appendChild(btn);
 }
 
 $('btnAdd').addEventListener('click', addTask);
@@ -1009,6 +1113,25 @@ $('btnDiag').addEventListener('click', async () => {
   const r = await window.api.netDiag();
   box.className = 'diag-box ' + (r.ok ? 'ok' : 'err');
   box.innerHTML = (r.lines || []).map((l) => `<div>${escapeHtml(l)}</div>`).join('');
+});
+
+// ---------------- 系统通知测试 ----------------
+
+$('btnTestNotify').addEventListener('click', async () => {
+  const el = $('testResult');
+  el.className = 'test-result';
+  el.textContent = '发送中…';
+  const r = await window.api.testNotification();
+  if (r.channel === 'toast') {
+    el.className = 'test-result ok';
+    el.textContent = '已发出 Windows 通知（右下角 / 通知中心），看看屏幕右下角';
+  } else if (r.channel === 'balloon') {
+    el.className = 'test-result ok';
+    el.textContent = '系统不支持通知中心，已退回托盘气泡';
+  } else {
+    el.className = 'test-result err';
+    el.textContent = '这个系统没有可用的通知通道，提醒到点时不会弹窗';
+  }
 });
 
 // ---------------- 快捷键 ----------------

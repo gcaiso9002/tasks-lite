@@ -14,6 +14,13 @@ const { Config } = require('./config');
 const GLOBAL_TOGGLE = 'Control+Shift+T';
 const ACCENT_FALLBACK = '#4f8cff';
 const BG = { dark: '#0f1115', light: '#f5f6f8' };
+const APP_ID = 'local.gcaiso.taskslite';
+
+// Windows 的系统通知（Toast）靠 AppUserModelID 认领身份。
+// 不设的话，通知要么根本不弹，要么在通知中心里显示成
+// "electron.app.Electron"，点开也不知道是哪个程序。
+// 必须在创建窗口之前设好，所以放在模块最顶上。
+try { app.setAppUserModelId(APP_ID); } catch (e) { /* 老版本 Electron 不支持，无所谓 */ }
 
 let win = null;
 let tray = null;
@@ -150,8 +157,11 @@ async function runSync(reason = 'manual') {
     // 2) 全量拉取，服务端是权威
     const remote = await client.listTodos(cal.href);
     store.upsertMany(remote);
+    // 服务器上已经没了的（别的客户端删掉的），本地也要跟着消失
+    const pendUids = new Set(store.data.pending.map((op) => op.uid || (op.todo && op.todo.uid)).filter(Boolean));
+    const pruned = store.pruneMissing(new Set(remote.map((t) => t.uid)), pendUids);
     store.markSynced();
-    console.log(`[sync] ${reason} 完成，拉到 ${remote.length} 条，待传队列剩 ${store.data.pending.length}`);
+    console.log(`[sync] ${reason} 完成，拉到 ${remote.length} 条，待传队列剩 ${store.data.pending.length}${pruned ? `，清理掉服务器上已删除的 ${pruned} 条` : ''}`);
 
     return { ok: true, pulled: remote.length };
   } catch (e) {
@@ -232,6 +242,47 @@ function collectTags() {
 
 let reminderTimer = null;
 
+/**
+ * 发一条 Windows 系统通知。
+ *
+ * 优先走 Toast（通知中心里能看到、能点开）；系统不支持时退回托盘气泡，
+ * 那也是系统级的，只是样式是老的 balloon。
+ * 返回实际用到的通道，界面上好告诉用户"到底弹出来没有"。
+ */
+function showSystemNotification({ title, body, onClick }) {
+  const icon = path.join(__dirname, '..', '..', 'assets', 'icon-256.png');
+
+  if (Notification.isSupported()) {
+    try {
+      const n = new Notification({
+        title,
+        body,
+        icon,
+        silent: false,
+        urgency: 'normal',
+        timeoutType: 'default',
+      });
+      if (onClick) n.on('click', onClick);
+      n.show();
+      return 'toast';
+    } catch (e) {
+      console.error('[notify] Toast 失败，改用托盘气泡：', e.message);
+    }
+  }
+
+  // 兜底：托盘气泡（Windows 专属的系统级提示）
+  if (tray && !tray.isDestroyed() && typeof tray.displayBalloon === 'function') {
+    try {
+      tray.displayBalloon({ title, content: body, iconType: 'info' });
+      return 'balloon';
+    } catch (e) {
+      console.error('[notify] 托盘气泡也失败：', e.message);
+    }
+  }
+  console.warn(`[notify] 没有可用的系统通知通道：${title} / ${body}`);
+  return 'none';
+}
+
 /** 扫一遍到点的任务并弹 Windows 通知；同一个 remindAt 只弹一次 */
 function checkReminders() {
   const now = Date.now();
@@ -243,14 +294,14 @@ function checkReminders() {
     if (store.alreadyReminded(t.uid, t.remindAt)) continue;
     store.markReminded(t.uid, t.remindAt);
     fired++;
-    if (Notification.isSupported()) {
-      const n = new Notification({
-        title: '任务提醒',
-        body: t.title || '(无标题)',
-      });
-      n.on('click', () => openTaskInWindow(t.uid));
-      n.show();
-    }
+
+    const when = String(t.remindAt).replace('T', ' ');
+    const where = t.list ? `　[${t.list}]` : '';
+    showSystemNotification({
+      title: '任务提醒',
+      body: `${t.title || '(无标题)'}${where}\n${when}`,
+      onClick: () => openTaskInWindow(t.uid),
+    });
   }
   if (fired) broadcast();
   return fired;
@@ -513,6 +564,16 @@ function registerIpc() {
   /** 手动扫一遍到点的提醒，设置完想立刻看到效果时用 */
   ipcMain.handle('reminder:check', () => ({ fired: checkReminders() }));
 
+  /** 测试系统通知：把实际用到的通道回报给界面，让用户知道弹没弹出来 */
+  ipcMain.handle('notify:test', async () => {
+    const ch = showSystemNotification({
+      title: 'Tasks Lite',
+      body: '系统通知测试成功 —— 点这条通知会跳到应用窗口。',
+      onClick: () => showWindow(),
+    });
+    return { channel: ch, supported: Notification.isSupported() };
+  });
+
   /**
    * 连接诊断：把「请求到底走没走代理、服务器回了什么」摊开给用户看。
    * 之前只显示一个状态码，出了 402 这种来自中间层而不是服务器的状态码，
@@ -572,8 +633,8 @@ function registerIpc() {
     t.completed = !!completed;
     store.upsert(t);
     broadcast();
-    if (completed && Notification.isSupported()) {
-      new Notification({ title: '任务完成', body: t.title }).show();
+    if (completed) {
+      showSystemNotification({ title: '任务完成', body: t.title || '(无标题)' });
     }
     let rolled = null;
     if (completed) rolled = await rolloverRecurring(t);
@@ -671,7 +732,7 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '立即同步', accelerator: 'CmdOrCtrl+R', click: () => runSync('manual') },
-        { label: '测试提醒通知', click: () => { checkReminders(); } },
+        { label: '测试系统通知', click: () => { checkReminders(); showSystemNotification({ title: 'Tasks Lite', body: '系统通知测试成功。' }); } },
         { label: '显示 / 隐藏', accelerator: GLOBAL_TOGGLE, click: toggleWindow },
         { type: 'separator' },
         { label: '退出', click: quitApp },
@@ -703,7 +764,7 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.3.1',
+            message: 'Tasks Lite 1.4.0',
             detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
                     + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
                     + `全局快捷键 ${GLOBAL_TOGGLE}`,

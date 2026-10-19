@@ -1,7 +1,7 @@
 {
   "name": "tasks-lite",
   "productName": "Tasks Lite",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "description": "本地 CalDAV 待办客户端，直连 Radicale / 任意 CalDAV 服务器",
   "main": "src/main/index.js",
   "type": "commonjs",

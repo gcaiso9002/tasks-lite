@@ -69,6 +69,31 @@ class Store {
     this.save();
   }
 
+  /**
+   * 服务器是权威：把"以前在服务器上、现在服务器上没了"的本地条目清掉。
+   *
+   * 只合并不清理的话，在 Task.org / 手机上删掉一条任务，这边的列表里
+   * 它会一直挂着，删不掉也同步不掉。
+   *
+   * 两种情况要留着：
+   *   - 正在待传队列里（刚建还没传上去，删了就丢了）
+   *   - 从来没传上去过（没有 href，纯本地新建的）
+   */
+  pruneMissing(remoteUids, pendingUids) {
+    const keep = remoteUids || new Set();
+    const pend = pendingUids || new Set();
+    const before = this.data.tasks.length;
+    this.data.tasks = this.data.tasks.filter((t) => {
+      if (keep.has(t.uid)) return true;
+      if (pend.has(t.uid)) return true;
+      if (!t.href) return true;
+      return false;
+    });
+    const removed = before - this.data.tasks.length;
+    if (removed) this.save();
+    return removed;
+  }
+
   remove(uid) {
     this.data.tasks = this.data.tasks.filter((t) => t.uid !== uid);
     this.save();

@@ -69,5 +69,18 @@ assert.deepStrictEqual(legacy.data.reminded, {});
 assert.strictEqual(legacy.tasks.length, 1);
 console.log('  ✅ 老缓存字段补默认值');
 
+// 7) 服务器是权威：服务器上删掉的，本地也要跟着消失
+s.upsert({ uid: 'srv1', title: '在服务器上', href: 'https://example.com/c/cal/srv1.ics', etag: 'x1' });
+s.upsert({ uid: 'gone', title: '服务器上已删除', href: 'https://example.com/c/cal/gone.ics', etag: 'x2' });
+s.upsert({ uid: 'local', title: '纯本地新建', href: '', etag: '' });
+s.upsert({ uid: 'pend', title: '正在补传', href: 'https://example.com/c/cal/pend.ics', etag: 'x3' });
+const removed = s.pruneMissing(new Set(['srv1', 'local', 'pend']), new Set(['pend']));
+assert.strictEqual(removed, 1, '只有服务器上已删除且不在待传队列里的那条该被清掉');
+assert.ok(s.get('srv1'), '服务器上还在的要保留');
+assert.ok(s.get('local'), '从没上传过的纯本地条目要保留');
+assert.ok(s.get('pend'), '正在待传队列里的要保留');
+assert.strictEqual(s.get('gone'), undefined, '服务器上已删除的本地条目要被清掉');
+console.log('  ✅ 服务器删掉的本地也跟着清掉');
+
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('全部通过');
