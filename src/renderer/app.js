@@ -264,6 +264,11 @@ function render() {
   const cal = $('calendar');
   list.innerHTML = '';
   cal.innerHTML = '';
+  // #calendar 在 HTML 里是带 hidden 的，日历视图下必须显式打开，
+  // 否则网格渲出来了也没人看得见（DOM 里有、屏幕上没有，最难查的一种）。
+  // 同理日历视图下要收起 #list —— 它是 flex:1，不收的话会把日历挤到屏幕最下面。
+  $('calendar').hidden = view !== 'calendar';
+  $('list').hidden = view === 'calendar';
 
   if (view === 'trash') { renderTrash(list); renderSidebar(); renderSyncState(); return; }
   if (view === 'calendar') return renderCalendar(cal);
@@ -364,9 +369,13 @@ function renderCalendar(cal) {
   const m = calCursor.getMonth();
   $('viewMode').value = calMode;
   const monthCount = state.tasks.filter((t) => t.due && t.due.startsWith(`${y}-${String(m + 1).padStart(2, '0')}`)).length;
-  $('viewCount').textContent = `本月 ${monthCount} 项有截止日`;
 
   if (calMode === 'week') {
+    const wkStart = mondayOf(calCursor);
+    const wkEnd = new Date(wkStart);
+    wkEnd.setDate(wkStart.getDate() + 6);
+    const weekCount = state.tasks.filter((t) => t.due && t.due >= ymdOf(wkStart) && t.due <= ymdOf(wkEnd)).length;
+    $('viewCount').textContent = `本周 ${weekCount} 项有截止日`;
     $('viewTitle').textContent = weekRangeText(calCursor);
     const grid = document.createElement('div');
     grid.className = 'cal-week';
@@ -392,6 +401,7 @@ function renderCalendar(cal) {
     }
     cal.appendChild(grid);
   } else {
+    $('viewCount').textContent = `本月 ${monthCount} 项有截止日`;
     $('viewTitle').textContent = `${y} 年 ${m + 1} 月`;
     const grid = document.createElement('div');
     grid.className = 'cal-grid';
