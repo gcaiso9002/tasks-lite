@@ -17,6 +17,17 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 - 服务器是权威数据源，本地缓存只为「断网也能看」服务
 - 单文件 exe，双击即用，不用装 Node、不用装运行时
 
+## 下载
+
+安装包放在 [Releases](https://github.com/gcaiso9002/tasks-lite/releases/latest) 里，不进 git 仓库 —— 两个 exe 加起来近 200 MB，塞进仓库会让每次 clone 都拖着走，而且 git 历史会永久保存二进制。
+
+| 文件 | 说明 |
+|---|---|
+| `Tasks Lite 1.0.0.exe` | 绿色免安装版，双击即用，推荐 |
+| `Tasks Lite Setup 1.0.0.exe` | NSIS 安装版，双击安装 |
+
+两个版本都是 x64，未做代码签名，Windows 可能弹 SmartScreen 提示，选「仍要运行」即可。
+
 ## 功能
 
 - 新建 / 编辑 / 删除任务
@@ -34,8 +45,8 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 
    | 字段 | 值 |
    |---|---|
-   | 服务器地址 | `https://caldav.gcaiso9002.xin/zx/` |
-   | 用户名 | `zx` |
+   | 服务器地址 | `https://你的服务器/你的用户名/` |
+   | 用户名 | `你的用户名` |
    | 密码 | 你自己的 |
    | 自动同步间隔 | 任意（分钟） |
 
