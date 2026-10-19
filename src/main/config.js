@@ -16,7 +16,12 @@ class Config {
       server: '',
       username: '',
       password: '',
-      syncIntervalMin: 5,
+      syncIntervalMin: 10,
+      autoLaunch: false,
+      // 外观：'system' | 'light' | 'dark'
+      theme: 'system',
+      // 自定义强调色（十六进制），空字符串表示用默认蓝
+      accentColor: '',
     };
     this.load();
   }
@@ -24,8 +29,10 @@ class Config {
   load() {
     try {
       if (fs.existsSync(this.file)) {
-        const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-        Object.assign(this.data, raw);
+        // 容忍 UTF-8 BOM：用户用记事本编辑过配置文件就会带上它，
+        // 而 JSON.parse 遇到 BOM 会直接抛错导致整个配置被重置。
+        const raw = fs.readFileSync(this.file, 'utf8').replace(/^\uFEFF/, '');
+        Object.assign(this.data, JSON.parse(raw));
       }
     } catch (e) {
       console.error('[config] 读取失败：', e.message);
@@ -84,6 +91,9 @@ class Config {
       username: this.data.username,
       hasPassword: !!this.data.password,
       syncIntervalMin: this.data.syncIntervalMin,
+      autoLaunch: !!this.data.autoLaunch,
+      theme: this.data.theme,
+      accentColor: this.data.accentColor,
     };
   }
 }

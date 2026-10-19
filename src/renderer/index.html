@@ -100,6 +100,43 @@
         <input id="cfgInterval" type="number" min="1" max="120" />
       </label>
 
+      <label class="switch-row">
+        <input id="cfgAutoLaunch" type="checkbox" />
+        <span>开机自动启动<small>开机后直接进托盘，不弹窗口（全局快捷键 Ctrl+Shift+T 唤起）</small></span>
+      </label>
+
+      <div class="section-title">外观</div>
+
+      <div class="field">
+        <span>主题</span>
+        <div class="theme-picker">
+          <button class="theme-opt" data-theme-opt="light">☀ 浅色</button>
+          <button class="theme-opt" data-theme-opt="dark">🌙 深色</button>
+          <button class="theme-opt" data-theme-opt="system">🖥 跟随系统</button>
+        </div>
+        <small>选「跟随系统」时，系统切到深色模式会自动跟着变。外观设置即时生效、自动保存。</small>
+      </div>
+
+      <div class="field">
+        <span>强调色</span>
+        <div class="accent-row">
+          <input id="cfgAccent" type="color" title="自定义强调色" />
+          <button class="swatch" data-accent="#4f8cff" style="--c:#4f8cff" title="默认蓝"></button>
+          <button class="swatch" data-accent="#38d39f" style="--c:#38d39f" title="青绿"></button>
+          <button class="swatch" data-accent="#a06bff" style="--c:#a06bff" title="紫"></button>
+          <button class="swatch" data-accent="#ff7ab6" style="--c:#ff7ab6" title="粉"></button>
+          <button class="swatch" data-accent="#ffb454" style="--c:#ffb454" title="橙"></button>
+          <button class="swatch" data-accent="#e05f5f" style="--c:#e05f5f" title="红"></button>
+          <button class="swatch" data-accent="#2d9cdb" style="--c:#2d9cdb" title="天蓝"></button>
+          <button id="cfgAccentReset" class="ghost tiny">恢复默认</button>
+        </div>
+      </div>
+
+      <div class="hint-box">
+        关掉窗口不会退出程序，会缩到右下角托盘。用全局快捷键
+        <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> 或点击托盘图标唤起；想彻底退出请用托盘右键菜单的「退出」。
+      </div>
+
       <div class="modal-foot">
         <span id="testResult" class="test-result"></span>
         <span class="spacer"></span>

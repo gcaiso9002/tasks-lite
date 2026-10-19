@@ -23,8 +23,8 @@ class Store {
   load() {
     try {
       if (fs.existsSync(this.file)) {
-        const raw = JSON.parse(fs.readFileSync(this.file, 'utf8'));
-        this.data = Object.assign(this.data, raw);
+        const raw = fs.readFileSync(this.file, 'utf8').replace(/^\uFEFF/, '');
+        this.data = Object.assign(this.data, JSON.parse(raw));
         if (!Array.isArray(this.data.tasks)) this.data.tasks = [];
         if (!Array.isArray(this.data.pending)) this.data.pending = [];
       }

@@ -1,7 +1,7 @@
 'use strict';
 
 const {
-  app, BrowserWindow, ipcMain, Menu, shell, dialog, Notification, net, safeStorage,
+  app, BrowserWindow, Tray, Menu, ipcMain, dialog, Notification, net, globalShortcut, nativeTheme,
 } = require('electron');
 const path = require('path');
 const crypto = require('crypto');
@@ -10,27 +10,75 @@ const { CaldavClient } = require('./caldav');
 const { Store } = require('./store');
 const { Config } = require('./config');
 
+const GLOBAL_TOGGLE = 'Control+Shift+T';
+const ACCENT_FALLBACK = '#4f8cff';
+const BG = { dark: '#0f1115', light: '#f5f6f8' };
+
 let win = null;
+let tray = null;
 let config = null;
 let store = null;
 let syncTimer = null;
+let isQuitting = false; // 区分「关窗口」与「真退出」
 
 // ================================================================ 同步管理
 
 const syncState = { syncing: false, error: null, lastSync: null, reason: '' };
 
 function broadcast() {
-  if (win && !win.isDestroyed()) {
+  if (win && !win.isDestroyed() && !win.webContents.isDestroyed()) {
     win.webContents.send('state', snapshot());
   }
 }
 
 function snapshot() {
+  const cfg = config.publicView();
+  cfg.resolvedTheme = resolvedTheme();
+  cfg.accent = accentColor();
   return {
     tasks: store.tasks,
-    config: config.publicView(),
+    config: cfg,
     sync: Object.assign({}, syncState, { lastSync: store.data.lastSync }),
   };
+}
+
+// ================================================================ 外观
+
+/** 'system' | 'light' | 'dark' → 实际生效的 'light' | 'dark' */
+function resolvedTheme() {
+  const t = config.data.theme;
+  if (t === 'dark' || t === 'light') return t;
+  return nativeTheme.shouldUseDarkColors ? 'dark' : 'light';
+}
+
+/** 用户自定义的强调色；非法值一律退回默认蓝 */
+function accentColor() {
+  const c = String(config.data.accentColor || '').trim();
+  return /^#[0-9a-f]{6}$/i.test(c) ? c.toLowerCase() : ACCENT_FALLBACK;
+}
+
+/**
+ * 把主题落到主进程（窗口底色 + nativeTheme），再推给渲染进程。
+ * 必须在 config 初始化之后调用。
+ */
+function applyTheme() {
+  const source = config.data.theme === 'dark' || config.data.theme === 'light'
+    ? config.data.theme
+    : 'system';
+  // 只在真变了的时候写，否则 themeSource 赋值会再次触发 updated，
+  // 和这里的 updated 监听组成死循环
+  if (nativeTheme.themeSource !== source) {
+    try {
+      nativeTheme.themeSource = source;
+    } catch (e) {
+      console.error('[theme] 设置 themeSource 失败：', e.message);
+    }
+  }
+  const resolved = resolvedTheme();
+  if (win && !win.isDestroyed()) {
+    try { win.setBackgroundColor(BG[resolved]); } catch (e) { /* 窗口还没建好 */ }
+  }
+  broadcast();
 }
 
 function makeClient() {
@@ -121,11 +169,120 @@ async function pushOrQueue(op, clientFn) {
     store.upsert(r);
     return { ok: true };
   } catch (e) {
-    // 网络问题就排队，下次同步补上
     store.enqueue(op);
     console.error('[push] 入队等待下次同步：', e.message);
     return { ok: true, queued: true, error: e.message };
   }
+}
+
+// ================================================================ 开机自启
+
+function applyAutoLaunch() {
+  try {
+    app.setLoginItemSettings({
+      openAtLogin: !!config.data.autoLaunch,
+      // 开机启动时直接进托盘，不弹窗口打扰
+      openAsHidden: !!config.data.autoLaunch,
+      args: ['--hidden'],
+    });
+  } catch (e) {
+    console.error('[autolaunch] 设置失败：', e.message);
+  }
+}
+
+// ================================================================ 窗口 / 托盘
+
+function createWindow(startHidden) {
+  win = new BrowserWindow({
+    width: 1200,
+    height: 800,
+    minWidth: 880,
+    minHeight: 560,
+    show: false,
+    title: 'Tasks Lite',
+    backgroundColor: BG[resolvedTheme()],
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
+      contextIsolation: true,
+      nodeIntegration: false,
+    },
+  });
+
+  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+  win.once('ready-to-show', () => {
+    if (!startHidden) win.show();
+  });
+
+  win.on('focus', () => runSync('focus'));
+
+  // 关窗口不等于退出，缩回托盘
+  win.on('close', (e) => {
+    if (!isQuitting) {
+      e.preventDefault();
+      win.hide();
+      updateTrayMenu();
+    }
+  });
+
+  win.on('closed', () => { win = null; });
+}
+
+function showWindow() {
+  if (!win || win.isDestroyed()) createWindow(false);
+  if (win.isMinimized()) win.restore();
+  win.show();
+  win.focus();
+}
+
+function toggleWindow() {
+  if (win && !win.isDestroyed() && win.isVisible() && win.isFocused()) {
+    win.hide();
+  } else {
+    showWindow();
+  }
+}
+
+function updateTrayMenu() {
+  if (!tray) return;
+  const hidden = !win || win.isDestroyed() || !win.isVisible();
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: hidden ? '显示窗口' : '隐藏窗口', click: () => (hidden ? showWindow() : win.hide()) },
+    { label: '新建任务', click: () => { showWindow(); broadcast(); win.webContents.send('focus-composer'); } },
+    { label: '立即同步', click: () => runSync('tray') },
+    { type: 'separator' },
+    {
+      label: '开机自动启动',
+      type: 'checkbox',
+      checked: !!config.data.autoLaunch,
+      click: (item) => {
+        config.update({ autoLaunch: item.checked });
+        applyAutoLaunch();
+        broadcast();
+      },
+    },
+    { type: 'separator' },
+    { label: `退出  (全局快捷键 ${GLOBAL_TOGGLE})`, click: quitApp },
+  ]));
+  tray.setToolTip(hidden ? 'Tasks Lite — 在后台运行' : 'Tasks Lite');
+}
+
+function createTray() {
+  const iconPath = path.join(__dirname, '..', '..', 'assets', 'tray-icon.png');
+  tray = new Tray(iconPath);
+  tray.on('click', toggleWindow);
+  tray.on('double-click', showWindow);
+  updateTrayMenu();
+  // 托盘图标可能因为任务栏窗口过多而被挤到屏幕外，
+  // 用 getBounds 确认它确实拿到了有效的显示区域
+  const b = tray.getBounds();
+  console.log(`[tray] 已创建  图标=${iconPath}  边界=${JSON.stringify(b)}  有效=${b.width > 0 && b.height > 0}`);
+}
+
+function quitApp() {
+  isQuitting = true;
+  globalShortcut.unregisterAll();
+  app.quit();
 }
 
 // ================================================================ IPC
@@ -134,14 +291,19 @@ function registerIpc() {
   ipcMain.handle('get-state', () => snapshot());
 
   ipcMain.handle('save-config', async (_e, patch) => {
+    const before = {
+      theme: config.data.theme,
+      accent: config.data.accentColor,
+      interval: config.data.syncIntervalMin,
+    };
     config.update(patch || {});
-    if (patch && patch.password === '') {
-      // 允许显式清空密码
-      config.update({ password: '' });
-    }
-    scheduleAutoSync();
+    if (patch && patch.password === '') config.update({ password: '' });
+    if (patch && 'autoLaunch' in patch) applyAutoLaunch();
+    // 外观即时生效，不必等用户点「保存」
+    if (config.data.theme !== before.theme || config.data.accentColor !== before.accent) applyTheme();
+    if (config.data.syncIntervalMin !== before.interval) scheduleAutoSync();
     broadcast();
-    return config.publicView();
+    return snapshot().config;
   });
 
   ipcMain.handle('test-connection', async () => {
@@ -151,11 +313,8 @@ function registerIpc() {
       const cal = calendars[0];
       let todoCount = 0;
       if (cal) {
-        try {
-          todoCount = (await client.listTodos(cal.href)).length;
-        } catch (e) {
-          todoCount = -1;
-        }
+        try { todoCount = (await client.listTodos(cal.href)).length; }
+        catch (e) { todoCount = -1; }
       }
       return { ok: true, home, calendars, todoCount };
     } catch (e) {
@@ -167,33 +326,27 @@ function registerIpc() {
 
   ipcMain.handle('task:save', async (_e, todo) => {
     const t = Object.assign({}, todo);
-    if (!t.uid) {
-      t.uid = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}@taskslite`;
-    }
+    if (!t.uid) t.uid = `${Date.now()}-${crypto.randomBytes(4).toString('hex')}@taskslite`;
     const calHref = store.data.calendarHref;
-    return pushOrQueue(
-      { op: 'put', todo: t, baseEtag: t.etag || null },
-      async (client) => {
-        const href = calHref || (await ensureCalendar(client)).href;
-        const r = await client.putTodo(href, t, t.etag || null);
-        return Object.assign({}, t, { href: r.href, etag: r.etag });
-      }
-    );
+    return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
+      const href = calHref || (await ensureCalendar(client)).href;
+      const r = await client.putTodo(href, t, t.etag || null);
+      return Object.assign({}, t, { href: r.href, etag: r.etag });
+    });
   });
 
   ipcMain.handle('task:delete', async (_e, uid) => {
     const t = store.get(uid);
     if (!t) return { ok: true };
     store.remove(uid);
-    if (!t.href) return { ok: true };
-    return pushOrQueue({ op: 'delete', uid, href: t.href, etag: t.etag || null }, async (client) => {
+    if (!t.href) { broadcast(); return { ok: true }; }
+    await pushOrQueue({ op: 'delete', uid, href: t.href, etag: t.etag || null }, async (client) => {
       await client.deleteTodo(client.absolute(t.href), t.etag || null);
-      return { uid, __deleted: true };
-    }).then(async () => {
-      store.remove(uid);
-      broadcast();
-      return { ok: true };
+      return { uid };
     });
+    store.remove(uid);
+    broadcast();
+    return { ok: true };
   });
 
   ipcMain.handle('task:toggle', async (_e, uid, completed) => {
@@ -202,19 +355,13 @@ function registerIpc() {
     t.completed = !!completed;
     store.upsert(t);
     broadcast();
-
-    // 顺手来条系统通知
     if (completed && Notification.isSupported()) {
       new Notification({ title: '任务完成', body: t.title }).show();
     }
-
-    return pushOrQueue(
-      { op: 'put', todo: t, baseEtag: t.etag || null },
-      async (client) => {
-        const r = await client.putTodo(store.data.calendarHref, t, t.etag || null);
-        return Object.assign({}, t, { href: r.href, etag: r.etag });
-      }
-    );
+    return pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
+      const r = await client.putTodo(store.data.calendarHref, t, t.etag || null);
+      return Object.assign({}, t, { href: r.href, etag: r.etag });
+    });
   });
 }
 
@@ -226,32 +373,7 @@ function scheduleAutoSync() {
   syncTimer = setInterval(() => runSync('auto'), min * 60 * 1000);
 }
 
-// ================================================================ 窗口与菜单
-
-function createWindow() {
-  win = new BrowserWindow({
-    width: 1200,
-    height: 800,
-    minWidth: 880,
-    minHeight: 560,
-    show: false,
-    title: 'Tasks Lite',
-    backgroundColor: '#0f1115',
-    autoHideMenuBar: true,
-    webPreferences: {
-      preload: path.join(__dirname, '..', 'preload', 'preload.js'),
-      contextIsolation: true,
-      nodeIntegration: false,
-    },
-  });
-
-  win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
-  win.once('ready-to-show', () => win.show());
-
-  // 聚焦即同步，保证看到的不是陈旧数据
-  win.on('focus', () => runSync('focus'));
-  win.on('closed', () => { win = null; });
-}
+// ================================================================ 菜单
 
 function buildMenu() {
   const template = [
@@ -259,8 +381,9 @@ function buildMenu() {
       label: '文件',
       submenu: [
         { label: '立即同步', accelerator: 'CmdOrCtrl+R', click: () => runSync('manual') },
+        { label: '显示 / 隐藏', accelerator: GLOBAL_TOGGLE, click: toggleWindow },
         { type: 'separator' },
-        { label: '退出', role: 'quit' },
+        { label: '退出', click: quitApp },
       ],
     },
     {
@@ -289,9 +412,10 @@ function buildMenu() {
           click: () => dialog.showMessageBox(win, {
             type: 'info',
             title: 'Tasks Lite',
-            message: 'Tasks Lite 1.0.0',
-            detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n' +
-                    `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}`,
+            message: 'Tasks Lite 1.1.0',
+            detail: '本地 CalDAV 待办客户端。\n数据存在你自己搭的 CalDAV 服务器上，不经过任何第三方。\n\n'
+                    + `Electron ${process.versions.electron} / Chrome ${process.versions.chrome}\nNode ${process.versions.node}\n`
+                    + `全局快捷键 ${GLOBAL_TOGGLE}`,
           }),
         },
       ],
@@ -306,32 +430,35 @@ const gotLock = app.requestSingleInstanceLock();
 if (!gotLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
-    if (win) {
-      if (win.isMinimized()) win.restore();
-      win.focus();
-    }
-  });
+  app.on('second-instance', showWindow);
 
   app.whenReady().then(() => {
     const userData = app.getPath('userData');
     config = new Config(userData);
     store = new Store(userData);
 
+    // 主题跟随系统时，系统切换深浅色会触发 updated，这里重新广播给渲染进程
+    nativeTheme.on('updated', applyTheme);
+    applyTheme();
+
     registerIpc();
     buildMenu();
-    createWindow();
-    scheduleAutoSync();
+    createTray();
 
-    // 启动后先静默同步一次
+    const startHidden = process.argv.includes('--hidden');
+    createWindow(startHidden);
+
+    applyAutoLaunch();
+
+    const ok = globalShortcut.register(GLOBAL_TOGGLE, toggleWindow);
+    if (!ok) console.error(`[shortcut] 全局快捷键 ${GLOBAL_TOGGLE} 注册失败（可能已被占用）`);
+
+    scheduleAutoSync();
     setTimeout(() => runSync('startup'), 1200);
 
-    app.on('activate', () => {
-      if (BrowserWindow.getAllWindows().length === 0) createWindow();
-    });
+    app.on('activate', () => showWindow());
   });
 
-  app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit();
-  });
+  // 注意：这里不处理 window-all-closed —— 关窗口只是缩回托盘，进程要留着
+  app.on('before-quit', () => { isQuitting = true; });
 }

@@ -31,6 +31,44 @@ function priorityLabel(p) {
   return '';
 }
 
+// ================================================================ 主题
+
+const ACCENT_DEFAULT = '#4f8cff';
+
+function hexToRgb(hex) {
+  let h = String(hex).replace('#', '');
+  if (h.length === 3) h = h.split('').map((c) => c + c).join('');
+  const n = parseInt(h, 16);
+  return { r: (n >> 16) & 255, g: (n >> 8) & 255, b: n & 255 };
+}
+
+/** 强调色只存一个色值，hover / 半透明底 / 按钮文字颜色都在这里现算 */
+function accentVars(hex) {
+  const { r, g, b } = hexToRgb(hex);
+  const lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255;
+  const light = lum > 0.55;
+  const k = light ? 0.82 : 1.18;           // 亮色压深、暗色提亮，当 hover 用
+  const mix = (v) => Math.max(0, Math.min(255, Math.round(v * k)));
+  return {
+    '--accent': hex,
+    '--accent-hover': `rgb(${mix(r)}, ${mix(g)}, ${mix(b)})`,
+    '--accent-soft': `rgba(${r}, ${g}, ${b}, .16)`,
+    '--on-accent': light ? '#141821' : '#ffffff',
+  };
+}
+
+/** cfg 来自主进程快照；accent 为空表示用默认蓝 */
+function applyThemeView(cfg) {
+  cfg = cfg || {};
+  const root = document.documentElement;
+  root.dataset.theme = cfg.resolvedTheme === 'light' ? 'light' : 'dark';
+  root.dataset.themeSource = cfg.theme || 'system';
+  const accent = /^#[0-9a-f]{6}$/i.test(cfg.accent || '') ? cfg.accent : ACCENT_DEFAULT;
+  const vars = accentVars(accent);
+  for (const k in vars) root.style.setProperty(k, vars[k]);
+  root.style.colorScheme = root.dataset.theme;
+}
+
 // ================================================================ 过滤
 
 function visibleTasks() {
@@ -233,11 +271,68 @@ function openSettings() {
   $('cfgUser').value = c.username || '';
   $('cfgPass').value = '';
   $('cfgPass').placeholder = c.hasPassword ? '已保存（留空表示不修改）' : '未设置';
-  $('cfgInterval').value = c.syncIntervalMin || 5;
+  $('cfgInterval').value = c.syncIntervalMin || 10;
+  $('cfgAutoLaunch').checked = !!c.autoLaunch;
+  $('cfgAccent').value = /^#[0-9a-f]{6}$/i.test(c.accent || '') ? c.accent : ACCENT_DEFAULT;
+  syncAppearanceUI();
   $('testResult').textContent = '';
   $('testResult').className = 'test-result';
   $('settings').hidden = false;
 }
+
+/** 主题按钮 / 色块的选中态要跟配置对上 */
+function syncAppearanceUI() {
+  const c = state.config || {};
+  const src = c.theme || 'system';
+  const accent = /^#[0-9a-f]{6}$/i.test(c.accentColor || '') ? c.accentColor.toLowerCase() : '';
+  document.querySelectorAll('.theme-opt').forEach((b) => {
+    b.classList.toggle('active', b.dataset.themeOpt === src);
+  });
+  document.querySelectorAll('.swatch').forEach((b) => {
+    b.classList.toggle('active', !!accent && b.dataset.accent.toLowerCase() === accent);
+  });
+}
+
+/** 外观是即时生效并自动保存的：先本地上色，再用主进程回包校正 */
+async function saveAppearance(patch, preview) {
+  if (preview) applyThemeView(Object.assign({}, state.config, preview));
+  const cfg = await window.api.saveConfig(patch);
+  state.config = cfg;
+  applyThemeView(cfg);
+  syncAppearanceUI();
+  return cfg;
+}
+
+document.querySelectorAll('.theme-opt').forEach((b) => {
+  b.addEventListener('click', () => {
+    const src = b.dataset.themeOpt;
+    saveAppearance({ theme: src }, {
+      theme: src,
+      resolvedTheme: src === 'system' ? state.config.resolvedTheme : src,
+    });
+  });
+});
+
+// 拖动调色板时先本地预览，松手才落盘
+$('cfgAccent').addEventListener('input', (e) => {
+  applyThemeView(Object.assign({}, state.config, { accent: e.target.value }));
+});
+$('cfgAccent').addEventListener('change', (e) => {
+  saveAppearance({ accentColor: e.target.value }, { accent: e.target.value });
+});
+
+document.querySelectorAll('.swatch').forEach((b) => {
+  b.addEventListener('click', () => {
+    const v = b.dataset.accent;
+    $('cfgAccent').value = v;
+    saveAppearance({ accentColor: v }, { accent: v });
+  });
+});
+
+$('cfgAccentReset').addEventListener('click', () => {
+  $('cfgAccent').value = ACCENT_DEFAULT;
+  saveAppearance({ accentColor: '' }, { accent: ACCENT_DEFAULT });
+});
 
 $('btnSettings').addEventListener('click', openSettings);
 $('setClose').addEventListener('click', () => { $('settings').hidden = true; });
@@ -247,13 +342,14 @@ $('btnSaveCfg').addEventListener('click', async () => {
   const patch = {
     server: $('cfgServer').value.trim(),
     username: $('cfgUser').value.trim(),
-    syncIntervalMin: Number($('cfgInterval').value) || 5,
+    syncIntervalMin: Number($('cfgInterval').value) || 10,
+    autoLaunch: $('cfgAutoLaunch').checked,
   };
   const pw = $('cfgPass').value;
   if (pw) patch.password = pw;
   await window.api.saveConfig(patch);
   $('settings').hidden = true;
-  toast('配置已保存');
+  toast(patch.autoLaunch ? '配置已保存，开机自启已开启' : '配置已保存');
   window.api.sync();
 });
 
@@ -265,7 +361,7 @@ $('btnTest').addEventListener('click', async () => {
   const patch = {
     server: $('cfgServer').value.trim(),
     username: $('cfgUser').value.trim(),
-    syncIntervalMin: Number($('cfgInterval').value) || 5,
+    syncIntervalMin: Number($('cfgInterval').value) || 10,
   };
   if (pw) patch.password = pw;
   if (pw || !$('cfgPass').placeholder.includes('已保存')) await window.api.saveConfig(patch);
@@ -295,5 +391,19 @@ document.addEventListener('keydown', (e) => {
 
 // ================================================================ 启动
 
-window.api.onState((s) => { state = s; render(); });
-window.api.getState().then((s) => { state = s; render(); });
+function acceptState(s) {
+  state = s;
+  applyThemeView(state.config);
+  syncAppearanceUI();
+  render();
+}
+
+window.api.onState(acceptState);
+window.api.getState().then(acceptState);
+
+// 托盘「新建任务」：把光标送进输入框，省得再点一次
+window.api.onFocusComposer(() => {
+  $('settings').hidden = true;
+  $('editor').hidden = true;
+  $('newTitle').focus();
+});

@@ -11,4 +11,6 @@ contextBridge.exposeInMainWorld('api', {
   deleteTask: (uid) => ipcRenderer.invoke('task:delete', uid),
   toggleTask: (uid, completed) => ipcRenderer.invoke('task:toggle', uid, completed),
   onState: (cb) => ipcRenderer.on('state', (_evt, state) => cb(state)),
+  /** 托盘菜单「新建任务」触发，把光标送到新建输入框 */
+  onFocusComposer: (cb) => ipcRenderer.on('focus-composer', () => cb()),
 });

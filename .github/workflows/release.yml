@@ -1,0 +1,88 @@
+name: Release
+
+# 推 tag（v1.2.3）自动打包 Windows exe 并挂到 Release
+on:
+  push:
+    tags:
+      - 'v*'
+  # 也可以在 Actions 页面手动触发
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: Build Windows x64
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Syntax check
+        run: |
+          node --check src/main/index.js
+          node --check src/main/caldav.js
+          node --check src/main/config.js
+          node --check src/main/store.js
+          node --check src/preload/preload.js
+          node --check src/renderer/app.js
+
+      - name: Renderer self-check
+        # 校验 app.js 里 $( 'id' ) 引用的元素都真实存在、外观控件齐全、颜色全部变量化
+        run: node scripts/check-dom.js
+
+      - name: Verify no secrets committed
+        # 注意：这里绝不能出现真实密码/域名，否则这个检查本身就等于把凭据写进仓库。
+        # 所以用「模式」而不是「已知值」来检测。
+        run: |
+          $files = Get-ChildItem src, test, scripts -Recurse -Include *.js,*.html,*.ps1 -File
+          $problems = @()
+
+          # 1) 硬编码的凭据赋值，例如 password = 'xxx' / PASS='xxx'
+          $credPat = '(?i)(password|passwd|pass|token|secret|apikey)\s*[:=]\s*["''][^"'']{6,}["'']'
+          foreach ($h in ($files | Select-String -Pattern $credPat -ErrorAction SilentlyContinue)) {
+            if ($h.Line -notmatch 'process\.env|\$\{|your|你的|placeholder|example') {
+              $problems += "疑似硬编码凭据 -> $($h.Filename):$($h.LineNumber)"
+            }
+          }
+
+          # 2) 非示例的真实 CalDAV 域名（caldav.example.com 视为占位符）
+          $hostPat = 'https?://caldav\.(?!example)[a-z0-9.-]+'
+          foreach ($h in ($files | Select-String -Pattern $hostPat -ErrorAction SilentlyContinue)) {
+            $problems += "疑似真实服务器地址 -> $($h.Filename):$($h.LineNumber)"
+          }
+
+          if ($problems.Count) {
+            $problems | ForEach-Object { Write-Host "  $_" }
+            Write-Error '源码里出现了凭据或真实服务器地址'
+            exit 1
+          }
+          Write-Host 'OK: 源码无硬编码凭据、无真实服务器地址'
+
+      - name: Regenerate icons
+        # 图标由脚本生成而不是提交位图产物，保证图标和代码始终一致
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/make-icon.ps1
+
+      - name: Build
+        run: npx electron-builder --win --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload assets to Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.exe
+          fail_on_unmatched_files: true
+          generate_release_notes: true

@@ -1,4 +1,4 @@
-$ErrorActionPreference = 'Stop'
+﻿$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
 $root = 'C:\Users\gcais\.minimax\sessions\mvs_e438193d1a894ff2bb5283df48485a30\workspace\tasks-lite'
@@ -44,6 +44,34 @@ foreach ($s in @(16, 24, 32, 48, 64, 128, 256)) {
     New-TaskIcon $s (Join-Path $out "icon-$s.png")
 }
 Write-Host "PNG 已生成：16/24/32/48/64/128/256"
+
+# --- 托盘图标 -------------------------------------------------------------
+# 透明背景 + 纯蓝对勾：Windows 任务栏深浅主题下都看得清，
+# 深色圆环在浅色任务栏上会糊成一个方块，所以托盘版去掉。
+function New-TrayIcon([int]$size, [string]$file) {
+    $bmp = New-Object System.Drawing.Bitmap $size, $size
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
+    $g.SmoothingMode = [System.Drawing.Drawing2D.SmoothingMode]::AntiAlias
+    $g.Clear([System.Drawing.Color]::Transparent)   # 透明底
+    $u = $size / 32.0
+    $blue = [System.Drawing.Color]::FromArgb(79, 140, 255)
+    $pen = New-Object System.Drawing.Pen $blue, (3.6 * $u)
+    $pen.StartCap = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.EndCap   = [System.Drawing.Drawing2D.LineCap]::Round
+    $pen.LineJoin = [System.Drawing.Drawing2D.LineJoin]::Round
+    $pts = @(
+        (New-Object System.Drawing.PointF (8 * $u),  (16.5 * $u)),
+        (New-Object System.Drawing.PointF (13.5 * $u), (22 * $u)),
+        (New-Object System.Drawing.PointF (24 * $u), (10 * $u))
+    )
+    $g.DrawLines($pen, [System.Drawing.PointF[]]$pts)
+    $g.Dispose()
+    $bmp.Save($file, [System.Drawing.Imaging.ImageFormat]::Png)
+    $bmp.Dispose()
+}
+
+New-TrayIcon 32 (Join-Path $root 'assets\tray-icon.png')
+Write-Host "托盘图标已生成: assets\tray-icon.png"
 
 # 用 Node 把多张 PNG 合成一个多尺寸 ICO
 $env:ICO_DIR = $out
