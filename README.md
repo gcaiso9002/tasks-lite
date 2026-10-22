@@ -23,8 +23,8 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 
 | 文件 | 说明 |
 |---|---|
-| `Tasks Lite 1.6.1.exe` | 绿色免安装版，双击即用 |
-| `Tasks Lite Setup 1.6.1.exe` | NSIS 安装版，双击安装，**推荐**（能可靠开机自启，见下） |
+| `Tasks Lite 1.6.2.exe` | 绿色免安装版，双击即用 |
+| `Tasks Lite Setup 1.6.2.exe` | NSIS 安装版，双击安装，**推荐**（能可靠开机自启，见下） |
 
 两个版本都是 x64，未做代码签名，Windows 可能弹 SmartScreen 提示，选「仍要运行」即可。
 
@@ -39,6 +39,18 @@ Tasks.org 的桌面版和 Android 版都把「自托管 CalDAV 同步」放在�
 > 推 `v*` 标签后 GitHub Actions 会自动打包并挂到 Release，本地不用等那几分钟构建。
 
 ## 更新记录
+
+### v1.6.2
+
+**修复的 bug**
+
+- **任务栏图标还是旧的（v1.6.1 没修干净）**。
+  v1.6.1 只换了 exe 里嵌的图标，但**没给 BrowserWindow 设 `icon`** ——
+  实测那个窗口的图标句柄是 `0`（`WM_GETICON` 与 `GetClassLongPtr(GCLP_HICON)` 全返回 0），
+  于是任务栏按钮退回到「Windows 按 exe 路径去查系统图标缓存」，
+  而 exe 路径和 1.6.0 完全一样，缓存里挂的还是旧图标，看起来就像没换。
+  现在显式给窗口指定 `assets/icon.ico`（Electron 在 Windows 上也建议用 ICO），
+  图标由程序自己提供，不再依赖系统缓存。
 
 ### v1.6.1
 

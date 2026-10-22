@@ -406,6 +406,12 @@ function createWindow(startHidden) {
     minHeight: 560,
     show: false,
     title: 'Tasks Lite',
+    // Windows 上必须显式给窗口一个图标。
+    // 不给的话窗口的图标句柄是 0（实测 GetClassLongPtr/ WM_GETICON 全返回 0），
+    // 任务栏按钮就退回到「Windows 自己按 exe 路径查图标」——那条路会命中
+    // 系统的图标缓存，旧版本留下的图标可能一直挂着，看起来像没换。
+    // Electron 文档也建议 Windows 上用 ICO。
+    icon: path.join(__dirname, '..', '..', 'assets', 'icon.ico'),
     backgroundColor: BG[resolvedTheme()],
     autoHideMenuBar: true,
     webPreferences: {

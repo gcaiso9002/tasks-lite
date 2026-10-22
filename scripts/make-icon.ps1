@@ -111,4 +111,12 @@ Write-Host "通知图标已生成: assets\icon-256.png"
 # 用 Node 把多张 PNG 合成一个多尺寸 ICO
 $env:ICO_DIR = $out
 node (Join-Path $root 'scripts\make-ico.js')
+
+# --- 窗口图标 -------------------------------------------------------------
+# BrowserWindow 的 icon 要读 assets\icon.ico（build/ 不进安装包，assets/ 才进）。
+# 不给窗口设图标时它的图标句柄是 0，任务栏会退回按 exe 路径查系统图标缓存，
+# 于是旧图标可能一直挂着 —— 这条路径必须显式给死。
+Copy-Item (Join-Path $out 'icon.ico') (Join-Path $assets 'icon.ico') -Force
+Write-Host "窗口图标已生成: assets\icon.ico"
+
 Write-Host "ICO 完成"
