@@ -412,7 +412,9 @@ function renderQuadrant(list, byUid) {
       empty.textContent = '空';
       box.appendChild(empty);
     }
-    for (const t of q.items) box.appendChild(buildRow(t, byUid, 'flat'));
+    // 四象限按「重要×紧急」把任务拆进四个格子，父子本来就可能被分到不同组，
+    // 缩进在这里没有意义（甚至会误导），所以显式钉死 depth=0
+    for (const t of q.items) box.appendChild(buildRow(t, byUid, 'flat', 0));
     list.appendChild(box);
   });
   renderSidebar();
@@ -458,7 +460,8 @@ function renderCalendar(cal) {
       h.className = 'cal-col-head';
       h.textContent = `${m + 1}/${d.getDate()} 周${WEEK_HEAD[i]}`;
       col.appendChild(h);
-      for (const t of tasksOnDay(day)) col.appendChild(buildRow(t, byUid, 'mini'));
+      // 日历是按「日期」分组的迷你卡片，父任务不在这天时缩进同样会误导 → depth=0
+      for (const t of tasksOnDay(day)) col.appendChild(buildRow(t, byUid, 'mini', 0));
       if (!tasksOnDay(day).length) {
         const e = document.createElement('div');
         e.className = 'cal-empty';
