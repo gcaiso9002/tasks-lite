@@ -130,6 +130,19 @@ body { display: flex; flex-direction: column; }
   border-bottom: 1px solid var(--line); flex: none;
 }
 .brand { font-weight: 700; letter-spacing: .5px; color: var(--accent); }
+/* 版本号：跟在品牌名后面，小一号、低调但不含糊 */
+.ver {
+  margin-left: 8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0;
+  color: var(--fg-dim);
+  background: var(--bg-3);
+  border-radius: 8px;
+  padding: 1px 6px;
+  vertical-align: middle;
+}
+.ver-inline { color: var(--fg-dim); font-weight: 500; }
 .search {
   flex: 1; max-width: 420px; padding: 7px 12px;
   background: var(--bg-3); border: 1px solid var(--line);
@@ -437,6 +450,8 @@ body { display: flex; flex-direction: column; }
 }
 .step-new:focus { border-color: var(--accent); border-style: solid; }
 .badge.step { color: var(--fg); background: var(--bg-3); }
+/* 父任务上的「└ N」：告诉用户下一条缩进项是它的孩子 */
+.badge.subcount { color: var(--accent); background: var(--accent-soft); font-variant-numeric: tabular-nums; }
 .switch-row.compact { margin: 0 0 12px; }
 
 /* 连接诊断输出 */

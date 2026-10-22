@@ -497,6 +497,9 @@ function quitApp() {
 
 function registerIpc() {
   ipcMain.handle('get-state', () => snapshot());
+  // 渲染层要显示版本号：唯一可信来源是 package.json → app.getVersion()，
+  // 别在界面上手写死版本（发版时最容易忘改，界面会一直说自己是旧版）。
+  ipcMain.handle('app:version', () => app.getVersion());
 
   ipcMain.handle('save-config', async (_e, patch) => {
     const before = {

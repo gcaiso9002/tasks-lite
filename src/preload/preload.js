@@ -4,6 +4,8 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('api', {
   getState: () => ipcRenderer.invoke('get-state'),
+  /** 应用版本号（来自 package.json，界面右上角与「设置 → 关于」都会显示） */
+  getVersion: () => ipcRenderer.invoke('app:version'),
   saveConfig: (patch) => ipcRenderer.invoke('save-config', patch),
   testConnection: () => ipcRenderer.invoke('test-connection'),
   sync: () => ipcRenderer.invoke('sync'),

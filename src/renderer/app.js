@@ -132,6 +132,60 @@ function descendantUids(uid, tasks) {
   return out;
 }
 
+/**
+ * 把排好序的扁平列表重排成「父任务紧跟它的孩子」。
+ *
+ * 为什么需要：列表是按「未完成 → 优先级 → 截止日 → 标题」全局排序的（见 visibleTasks），
+ * 完全不看父子关系；而 buildRow 只按 depthOf() 决定缩进。
+ * 两者一叠加，子任务会被缩进着插在某个毫不相干的邻居下面
+ * —— 看起来像那个邻居的孩子，层级直接错乱。
+ * （手机上 Task.org 用「⌃N」折叠子任务，桌面端是平铺，所以手机看着正常、桌面全乱。）
+ *
+ * 规则：
+ *   - 父不在可见集合里（被筛选掉、或不属于当前视图）→ 当顶级显示，不缩进，
+ *     否则它会假装成上面那条任务的孩子；
+ *   - 兄弟之间保持原来的排序结果；
+ *   - 环路安全：见到重复 uid 就跳过，没人认领的兜底补在末尾。
+ */
+function groupByHierarchy(sorted) {
+  const inList = new Set(sorted.map((t) => t.uid));
+  const children = new Map();
+  const roots = [];
+
+  for (const t of sorted) {
+    const p = t.parentUid && t.parentUid !== t.uid && inList.has(t.parentUid) ? t.parentUid : '';
+    if (!p) {
+      roots.push(t);
+      continue;
+    }
+    if (!children.has(p)) children.set(p, []);
+    children.get(p).push(t);
+  }
+
+  const out = [];
+  const seen = new Set();
+  const emit = (t, depth) => {
+    if (seen.has(t.uid)) return;   // 环路 / 重复引用
+    seen.add(t.uid);
+    out.push({ task: t, depth });
+    for (const c of children.get(t.uid) || []) emit(c, depth + 1);
+  };
+
+  for (const r of roots) emit(r, 0);
+  for (const t of sorted) emit(t, 0);   // 兜底：只在自己构成环里的任务
+  return out;
+}
+
+/** parentUid → 直接子任务数；render() 里重算，用来在父任务行上标「└ N」 */
+let childCounts = new Map();
+
+function recountChildren() {
+  childCounts = new Map();
+  for (const t of state.tasks) {
+    if (t.parentUid) childCounts.set(t.parentUid, (childCounts.get(t.parentUid) || 0) + 1);
+  }
+}
+
 // ================================================================ 过滤
 
 const SMART = {
@@ -202,16 +256,24 @@ function repeatLabel(rrule) {
   return '循环';
 }
 
-function buildRow(t, byUid, extraClass) {
-  const depth = depthOf(t, byUid);
+function buildRow(t, byUid, extraClass, depthOverride) {
+  // 列表视图由 groupByHierarchy 算好深度再传进来（保证父任务就在上一行）；
+  // 四象限等其它视图没有分组上下文，退回按 parentUid 自己算。
+  const depth = Number.isInteger(depthOverride) ? depthOverride : depthOf(t, byUid);
   const row = document.createElement('div');
   row.className = 'item' + (t.completed ? ' done' : '') + (editingUid === t.uid ? ' editing' : '')
     + (depth ? ' sub' : '') + (extraClass ? ' ' + extraClass : '');
   row.dataset.uid = t.uid;
-  if (depth) row.style.paddingLeft = `${12 + depth * 20}px`;
+  if (depth) {
+    row.style.paddingLeft = `${12 + depth * 20}px`;
+    row.dataset.depth = String(depth);
+  }
 
   const today = todayStr();
   const badges = [];
+  // 有子任务的父任务给个「└ N」，不然平铺列表里看不出来它是个父任务
+  const kids = childCounts.get(t.uid) || 0;
+  if (kids) badges.push(`<span class="badge subcount">└ ${kids}</span>`);
   const pl = priorityLabel(t.priority);
   if (pl) badges.push(`<span class="badge p${t.priority}">${pl}优先级</span>`);
   if (t.due) {
@@ -246,6 +308,7 @@ function buildRow(t, byUid, extraClass) {
 
 function render() {
   const byUid = new Map(state.tasks.map((t) => [t.uid, t]));
+  recountChildren();
   const main = document.querySelector('.main');
   main.classList.toggle('trash-mode', view === 'trash');
   main.classList.toggle('cal-mode', view === 'calendar');
@@ -281,7 +344,10 @@ function render() {
     ? `${items.length} 项待办`
     : `${state.tasks.filter((t) => !t.completed).length} 项未完成 / 共 ${state.tasks.length} 项`;
 
-  for (const t of items) list.appendChild(buildRow(t, byUid));
+  // 平铺列表必须重排成「父 → 子」，否则子任务会缩进着挂在不相干的邻居下面
+  for (const { task, depth } of groupByHierarchy(items)) {
+    list.appendChild(buildRow(task, byUid, '', depth));
+  }
 
   renderSidebar();
   renderSyncState();
@@ -1005,6 +1071,7 @@ function openSettings() {
   $('cfgInterval').value = c.syncIntervalMin || 10;
   $('cfgProxy').value = c.proxyMode === 'system' ? 'system' : 'direct';
   $('cfgAutoLaunch').checked = !!c.autoLaunch;
+  $('setServer').textContent = c.server || '未配置';
   $('cfgAccent').value = /^#[0-9a-f]{6}$/i.test(c.accent || '') ? c.accent : ACCENT_DEFAULT;
   syncAppearanceUI();
   $('diagBox').hidden = true;
@@ -1167,6 +1234,12 @@ function acceptState(s) {
 
 window.api.onState(acceptState);
 window.api.getState().then(acceptState);
+
+// 版本号：从主进程的 app.getVersion()（= package.json）取，避免界面上手写死版本
+window.api.getVersion().then((v) => {
+  $('appVer').textContent = 'v' + v;
+  $('setVer').textContent = 'v' + v;
+}).catch(() => { /* 取不到就不显示，不影响使用 */ });
 
 // 托盘「新建任务」：把光标送进输入框，省得再点一次
 window.api.onFocusComposer(() => {

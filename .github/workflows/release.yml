@@ -46,12 +46,14 @@ jobs:
 
       - name: Unit tests
         # 纯本地，不联网：ICS 字段往返 + 缓存层回收站/提醒 + 同步模型 + 快速添加解析/RRULE + 412 冲突自愈
+        # hierarchy：父子层级的列表重排（v1.6.1 修的「子任务错挂在邻居下面」）
         run: |
           node test/ics-roundtrip.js
           node test/store-unit.js
           node test/sync-model-unit.js
           node test/parse-and-rrule.js
           node test/conflict-unit.js
+          node test/hierarchy-unit.js
 
       - name: Verify no secrets committed
         # 注意：这里绝不能出现真实密码/域名，否则这个检查本身就等于把凭据写进仓库。

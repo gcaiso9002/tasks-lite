@@ -8,7 +8,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand">Tasks&nbsp;Lite</div>
+    <div class="brand">Tasks&nbsp;Lite<span id="appVer" class="ver"></span></div>
     <input id="search" class="search" type="search" placeholder="搜索任务…  (Ctrl+F)" />
     <div class="topbar-right">
       <div id="syncState" class="sync-state"><span class="dot"></span><span class="txt">就绪</span></div>
@@ -236,6 +236,16 @@
         <small>
           提醒到点时会在右下角弹出 Windows 通知（通知中心里能看到），点通知直接跳到那条任务；
           系统不支持时退回托盘气泡。到点前请保持程序在托盘里运行。
+        </small>
+      </div>
+
+      <div class="section-title">关于</div>
+
+      <div class="field">
+        <span>Tasks Lite <span id="setVer" class="ver-inline"></span></span>
+        <small>
+          本地 CalDAV 待办客户端。数据只存在你自己的 CalDAV 服务器上（当前
+          <strong id="setServer">—</strong>），不经过任何第三方云服务；密码用 Windows DPAPI 加密后存本机。
         </small>
       </div>
 
