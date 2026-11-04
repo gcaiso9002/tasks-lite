@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'" />
+  <title>Tasks Lite</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">Tasks&nbsp;Lite<span id="appVer" class="ver"></span></div>
+    <input id="search" class="search" type="search" placeholder="搜索任务…  (Ctrl+F)" />
+    <div class="topbar-right">
+      <div id="syncState" class="sync-state"><span class="dot"></span><span class="txt">就绪</span></div>
+      <button id="btnSync" class="icon-btn" title="立即同步 (Ctrl+R)">⟳</button>
+      <button id="btnSettings" class="icon-btn" title="设置">⚙</button>
+    </div>
+  </header>
+
+  <div class="app">
+    <!-- 侧边栏：专注视图 / 列表 / 标签 / 回收站 -->
+    <aside class="sidebar">
+      <div class="side-sec">
+        <div id="listNav" class="side-list"></div>
+      </div>
+      <div class="side-sec">
+        <div class="side-head">列表</div>
+        <div id="listBox" class="side-list"></div>
+      </div>
+      <div class="side-sec">
+        <div class="side-head">标签</div>
+        <div id="tagNav" class="side-list"></div>
+      </div>
+      <div class="side-sec side-bottom">
+        <button id="btnTrash" class="side-item">
+          <span class="nav-ico" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l.9 12.1A2 2 0 0 0 9.4 21h5.2a2 2 0 0 0 2-1.9L17.5 7M10 11v6M14 11v6"/></svg></span>
+          <span class="side-label">回收站</span><span id="trashCount" class="pill"></span>
+        </button>
+        <button id="btnTrashEmpty" class="side-mini" hidden>清空回收站</button>
+      </div>
+    </aside>
+
+    <div class="main">
+      <section class="composer">
+        <input id="newTitle" class="new-title" type="text" placeholder="添加任务…  支持 明天 / 下午3点 / #标签 / !高" />
+        <select id="newPriority" class="new-priority" title="优先级">
+          <option value="0">无优先级</option>
+          <option value="1">高</option>
+          <option value="5">中</option>
+          <option value="9">低</option>
+        </select>
+        <input id="newDue" class="new-due" type="date" title="截止日期" />
+        <button id="btnAdd" class="primary">添加</button>
+      </section>
+
+      <div id="quickPreview" class="quick-preview" hidden></div>
+
+      <nav class="filters">
+        <button class="filter active" data-filter="open">未完成</button>
+        <button class="filter" data-filter="today">今天到期</button>
+        <button class="filter" data-filter="overdue">已逾期</button>
+        <button class="filter" data-filter="done">已完成</button>
+        <button class="filter" data-filter="all">全部</button>
+        <select id="filterSmart" class="smart-filter" title="更多筛选">
+          <option value="">更多筛选…</option>
+          <option value="tomorrow">明天到期</option>
+          <option value="week">本周内到期</option>
+          <option value="next7">未来 7 天</option>
+          <option value="nodue">无截止日</option>
+          <option value="high">高优先级</option>
+          <option value="repeat">循环任务</option>
+          <option value="remind">有提醒</option>
+          <option value="myday">在今天</option>
+          <option value="parent">是父任务</option>
+          <option value="sub">是子任务</option>
+        </select>
+        <span class="spacer"></span>
+        <span id="count" class="count"></span>
+      </nav>
+
+      <div id="viewHead" class="view-head" hidden>
+        <button id="viewPrev" class="icon-btn">‹</button>
+        <span id="viewTitle" class="view-title"></span>
+        <button id="viewNext" class="icon-btn">›</button>
+        <button id="viewToday" class="ghost tiny">今天</button>
+        <select id="viewMode" class="smart-filter">
+          <option value="month">月</option>
+          <option value="week">周</option>
+        </select>
+        <span class="spacer"></span>
+        <span id="viewCount" class="count"></span>
+      </div>
+
+      <main id="list" class="list"></main>
+      <section id="calendar" class="calendar" hidden></section>
+
+      <div id="empty" class="empty" hidden>
+        <div class="empty-art">✓</div>
+        <div class="empty-text">这里没有任务</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- 单条任务的展开编辑区 -->
+  <div id="editor" class="editor" hidden>
+    <div class="editor-head">
+      <input id="edTitle" class="ed-title" type="text" placeholder="任务标题" />
+      <button id="edClose" class="icon-btn">✕</button>
+    </div>
+    <div class="editor-grid">
+      <label>优先级
+        <select id="edPriority">
+          <option value="0">无优先级</option>
+          <option value="1">高</option>
+          <option value="5">中</option>
+          <option value="9">低</option>
+        </select>
+      </label>
+      <label>截止日期 <input id="edDue" type="date" /></label>
+      <label>提醒时间 <input id="edRemind" type="datetime-local" /></label>
+      <label>重复
+        <select id="edRepeat">
+          <option value="">不重复</option>
+          <option value="FREQ=DAILY">每天</option>
+          <option value="FREQ=WEEKLY">每周</option>
+          <option value="FREQ=WEEKLY;BYDAY=MO,TU,WE,TH,FR">每个工作日</option>
+          <option value="FREQ=MONTHLY">每月</option>
+          <option value="FREQ=YEARLY">每年</option>
+          <option value="__custom">自定义 RRULE…</option>
+        </select>
+      </label>
+      <label>列表 <input id="edList" list="listOptions" placeholder="留空＝未分类" /></label>
+      <label>标签 <input id="edTags" placeholder="逗号分隔，如：家,急" /></label>
+    </div>
+    <label class="editor-row">
+      <span>上级任务</span>
+      <select id="edParent"></select>
+    </label>
+
+    <label class="switch-row compact">
+      <input id="edMyDay" type="checkbox" />
+      <span>加入「今天」<small>侧边栏置顶的今日清单，完成或点 ☀ 自动移出</small></span>
+    </label>
+
+    <div class="steps-box">
+      <div class="steps-head">步骤 <span id="edStepsCount" class="meta"></span></div>
+      <ul id="edSteps" class="steps"></ul>
+      <input id="edStepNew" class="step-new" type="text" placeholder="加一步，回车确认" />
+    </div>
+
+    <datalist id="listOptions"></datalist>
+    <textarea id="edNotes" class="ed-notes" rows="4" placeholder="备注…"></textarea>
+    <div class="editor-foot">
+      <span id="edMeta" class="meta"></span>
+      <span class="spacer"></span>
+      <button id="edSave" class="primary">保存</button>
+    </div>
+  </div>
+
+  <!-- 设置 -->
+  <div id="settings" class="modal" hidden>
+    <div class="modal-card">
+      <div class="modal-head">
+        <h2>设置</h2>
+        <button id="setClose" class="icon-btn">✕</button>
+      </div>
+
+      <label class="field">
+        <span>服务器地址</span>
+        <input id="cfgServer" type="text" placeholder="https://caldav.example.com/用户名/" />
+        <small>必须是<strong>带用户名的 principal 路径</strong>。只填域名根路径的话，Task.org 一类客户端会因拿不到 calendar-home-set 而判定为无效。</small>
+      </label>
+
+      <label class="field">
+        <span>用户名</span>
+        <input id="cfgUser" type="text" autocomplete="username" />
+      </label>
+
+      <label class="field">
+        <span>密码</span>
+        <input id="cfgPass" type="password" autocomplete="current-password" placeholder="保存在本机，用 Windows DPAPI 加密" />
+      </label>
+
+      <label class="field">
+        <span>自动同步间隔（分钟）</span>
+        <input id="cfgInterval" type="number" min="1" max="120" />
+      </label>
+
+      <label class="field">
+        <span>连接方式</span>
+        <select id="cfgProxy">
+          <option value="direct">直连（不走系统代理）</option>
+          <option value="system">跟随系统代理</option>
+        </select>
+        <small>自建服务器一般都能直连，绕代理既慢又会引入代理自己的错误状态（遇到过 402）。只有当服务器<strong>必须经代理才能访问</strong>时才选「跟随系统代理」。</small>
+      </label>
+
+      <label class="switch-row">
+        <input id="cfgAutoLaunch" type="checkbox" />
+        <span>开机自动启动<small>开机后直接进托盘，不弹窗口（全局快捷键 Ctrl+Shift+T 唤起）</small></span>
+      </label>
+
+      <div class="section-title">外观</div>
+
+      <div class="field">
+        <span>主题</span>
+        <div class="theme-picker">
+          <button class="theme-opt" data-theme-opt="light">☀ 浅色</button>
+          <button class="theme-opt" data-theme-opt="dark">🌙 深色</button>
+          <button class="theme-opt" data-theme-opt="system">🖥 跟随系统</button>
+        </div>
+        <small>选「跟随系统」时，系统切到深色模式会自动跟着变。外观设置即时生效、自动保存。</small>
+      </div>
+
+      <div class="field">
+        <span>强调色</span>
+        <div class="accent-row">
+          <input id="cfgAccent" type="color" title="自定义强调色" />
+          <button class="swatch" data-accent="#4f8cff" style="--c:#4f8cff" title="默认蓝"></button>
+          <button class="swatch" data-accent="#38d39f" style="--c:#38d39f" title="青绿"></button>
+          <button class="swatch" data-accent="#a06bff" style="--c:#a06bff" title="紫"></button>
+          <button class="swatch" data-accent="#ff7ab6" style="--c:#ff7ab6" title="粉"></button>
+          <button class="swatch" data-accent="#ffb454" style="--c:#ffb454" title="橙"></button>
+          <button class="swatch" data-accent="#e05f5f" style="--c:#e05f5f" title="红"></button>
+          <button class="swatch" data-accent="#2d9cdb" style="--c:#2d9cdb" title="天蓝"></button>
+          <button id="cfgAccentReset" class="ghost tiny">恢复默认</button>
+        </div>
+      </div>
+
+      <div class="section-title">通知</div>
+
+      <div class="field">
+        <span>Windows 系统通知</span>
+        <div class="accent-row">
+          <button id="btnTestNotify" class="ghost">发一条测试通知</button>
+        </div>
+        <small>
+          提醒到点时会在右下角弹出 Windows 通知（通知中心里能看到），点通知直接跳到那条任务；
+          系统不支持时退回托盘气泡。到点前请保持程序在托盘里运行。
+        </small>
+      </div>
+
+      <div class="section-title">关于</div>
+
+      <div class="field">
+        <span>Tasks Lite <span id="setVer" class="ver-inline"></span></span>
+        <small>
+          本地 CalDAV 待办客户端。数据只存在你自己的 CalDAV 服务器上（当前
+          <strong id="setServer">—</strong>），不经过任何第三方云服务；密码用 Windows DPAPI 加密后存本机。
+        </small>
+      </div>
+
+      <div class="hint-box">
+        关掉窗口不会退出程序，会缩到右下角托盘。用全局快捷键
+        <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>T</kbd> 或点击托盘图标唤起；想彻底退出请用托盘右键菜单的「退出」。
+      </div>
+
+      <div class="modal-foot">
+        <span id="testResult" class="test-result"></span>
+        <span class="spacer"></span>
+        <button id="btnDiag" class="ghost">诊断连接</button>
+        <button id="btnTest" class="ghost">测试连接</button>
+        <button id="btnSaveCfg" class="primary">保存</button>
+      </div>
+
+      <div id="diagBox" class="diag-box" hidden></div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast" hidden></div>
+
+  <script src="bridge.js"></script>
+  <script src="quick-parse.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

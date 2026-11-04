@@ -7,6 +7,23 @@ const NS_CALDAV = 'urn:ietf:params:xml:ns:caldav';
 
 const XML_HEADER = '<?xml version="1.0" encoding="UTF-8"?>';
 
+/**
+ * HTTP Basic 头。
+ *
+ * 这段代码桌面端和 Android 端共用，所以不能直接写 Buffer ——
+ * WebView 里没有 Node 的 Buffer，但有 btoa。
+ */
+function basicAuth(username, password) {
+  const raw = `${username}:${password}`;
+  if (typeof Buffer !== 'undefined') {
+    return 'Basic ' + Buffer.from(raw, 'utf8').toString('base64');
+  }
+  const bytes = new TextEncoder().encode(raw);
+  let bin = '';
+  for (const b of bytes) bin += String.fromCharCode(b);
+  return 'Basic ' + btoa(bin);
+}
+
 /** 把 CalDAV 服务当成一个"带 VTODO 的日历集合"来访问 */
 class CaldavClient {
   /**
@@ -20,8 +37,7 @@ class CaldavClient {
     this.fetchImpl = fetchImpl;
     this.baseUrl = normalizeBase(baseUrl);
     this.origin = new URL(this.baseUrl).origin;
-    this.authorization =
-      'Basic ' + Buffer.from(`${username}:${password}`, 'utf8').toString('base64');
+    this.authorization = basicAuth(username, password);
   }
 
   // ---------------------------------------------------------------- 底层请求

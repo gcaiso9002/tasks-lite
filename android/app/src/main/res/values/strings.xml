@@ -1,0 +1,7 @@
+<?xml version='1.0' encoding='utf-8'?>
+<resources>
+    <string name="app_name">Tasks Lite</string>
+    <string name="title_activity_main">Tasks Lite</string>
+    <string name="package_name">com.gcaiso.taskslite</string>
+    <string name="custom_url_scheme">com.gcaiso.taskslite</string>
+</resources>

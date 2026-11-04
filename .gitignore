@@ -3,6 +3,16 @@ node_modules/
 dist/
 out/
 
+# Android 构建产物与本地环境
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.idea/
+*.apk
+*.aab
+*.keystore
+
 # Electron 运行时缓存
 node_modules/electron/dist/
 node_modules/electron/path.txt

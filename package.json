@@ -11,14 +11,21 @@
     "start": "electron .",
     "dist": "electron-builder --win --x64",
     "dist:portable": "electron-builder --win portable --x64",
+    "web:build": "node scripts/build-web.js",
+    "android:sync": "npm run web:build && cap sync android",
+    "android:open": "npm run android:sync && cap open android",
     "test": "node test/ics-roundtrip.js && node test/store-unit.js && node test/sync-model-unit.js && node test/parse-and-rrule.js && node test/conflict-unit.js && node test/hierarchy-unit.js && node scripts/check-dom.js"
   },
   "dependencies": {
+    "@capacitor/android": "^8.6.0",
+    "@capacitor/core": "^8.6.0",
     "ical.js": "2.2.1"
   },
   "devDependencies": {
+    "@capacitor/cli": "^8.6.0",
     "electron": "44.9.0",
-    "electron-builder": "26.15.3"
+    "electron-builder": "26.15.3",
+    "esbuild": "^0.28.2"
   },
   "build": {
     "appId": "local.gcaiso.taskslite",
