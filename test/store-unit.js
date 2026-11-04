@@ -6,7 +6,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { Store } = require('../src/main/store');
+const { Store, cascadeCompletion } = require('../src/main/store');
 
 const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'taskslite-store-'));
 const s = new Store(dir);
@@ -81,6 +81,58 @@ assert.ok(s.get('local'), '从没上传过的纯本地条目要保留');
 assert.ok(s.get('pend'), '正在待传队列里的要保留');
 assert.strictEqual(s.get('gone'), undefined, '服务器上已删除的本地条目要被清掉');
 console.log('  ✅ 服务器删掉的本地也跟着清掉');
+
+// 8) 子任务全部完成 → 父任务自动完成；只完成一部分时父任务不动
+{
+  const tree = [
+    { uid: 'P', title: '父', completed: false },
+    { uid: 'A', title: '子一', parentUid: 'P', completed: false },
+    { uid: 'B', title: '子二', parentUid: 'P', completed: false },
+  ];
+  tree[1].completed = true;                 // 调用方会先把当前任务标成完成
+  let changed = cascadeCompletion(tree, 'A', true);
+  assert.strictEqual(changed.length, 0, '还有子任务没完成时不能带动父任务');
+  assert.strictEqual(tree[0].completed, false);
+
+  tree[2].completed = true;                 // 最后一个孩子完成
+  changed = cascadeCompletion(tree, 'B', true);
+  assert.deepStrictEqual(changed.map((t) => t.uid), ['P'], '全部子任务完成应带动父任务');
+  assert.strictEqual(tree[0].completed, true);
+  console.log('  ✅ 子任务全完成 → 父任务自动完成');
+}
+
+// 9) 多层：孩子完成带动父，父再带动祖父
+{
+  const tree = [
+    { uid: 'G', completed: false },
+    { uid: 'P', parentUid: 'G', completed: false },
+    { uid: 'A', parentUid: 'P', completed: false },
+  ];
+  tree[2].completed = true;
+  const changed = cascadeCompletion(tree, 'A', true);
+  assert.deepStrictEqual(changed.map((t) => t.uid), ['P', 'G'], '应逐级向上完成');
+  console.log('  ✅ 多层父任务逐级完成');
+}
+
+// 10) 重新打开子任务 → 上级跟着打开；环路不会死循环
+{
+  const tree = [
+    { uid: 'G', completed: true },
+    { uid: 'P', parentUid: 'G', completed: true },
+    { uid: 'A', parentUid: 'P', completed: true },
+  ];
+  tree[2].completed = false;                // 调用方会先把当前任务标成未完成
+  const changed = cascadeCompletion(tree, 'A', false);
+  assert.deepStrictEqual(changed.map((t) => t.uid), ['P', 'G'], '重新打开应把上级一起打开');
+  assert.ok(tree.every((t) => !t.completed));
+
+  const loop = [
+    { uid: 'X', parentUid: 'Y', completed: false },
+    { uid: 'Y', parentUid: 'X', completed: false },
+  ];
+  assert.ok(cascadeCompletion(loop, 'X', true).length <= 1, '环路要能停下，不能无限向上');
+  console.log('  ✅ 重新打开联动 / 环路保护');
+}
 
 fs.rmSync(dir, { recursive: true, force: true });
 console.log('全部通过');

@@ -8,7 +8,7 @@ const crypto = require('crypto');
 
 const { CaldavClient, toLocalInput } = require('./caldav');
 const { nextOccurrence, seriesUid } = require('./rrule');
-const { Store } = require('./store');
+const { Store, cascadeCompletion } = require('./store');
 const { Config } = require('./config');
 
 const GLOBAL_TOGGLE = 'Control+Shift+T';
@@ -693,23 +693,33 @@ function registerIpc() {
     return out;
   });
 
-    ipcMain.handle('task:toggle', async (_e, uid, completed) => {
+  ipcMain.handle('task:toggle', async (_e, uid, completed) => {
     const t = store.get(uid);
     if (!t) return { ok: false };
     t.completed = !!completed;
     // 本地优先：先落库标脏，界面立刻生效
     store.upsert(t, { dirty: true });
+
+    // 子任务全部完成 → 父任务自动完成（逐级向上）；重新打开子任务 → 父任务跟着打开
+    const cascaded = cascadeCompletion(store.tasks, uid, !!completed);
+    for (const p of cascaded) store.upsert(p, { dirty: true });
+
     broadcast();
     if (completed) {
       showSystemNotification({ title: '任务完成', body: t.title || '(无标题)' });
     }
+
+    const push = (x) => pushOrQueue({ op: 'put', todo: x, baseEtag: x.etag || null }, async (client) => {
+      const r2 = await client.putTodoResilient(store.data.calendarHref, x, x.etag || null);
+      return Object.assign({}, x, { href: r2.href, etag: r2.etag });
+    });
+
     let rolled = null;
     if (completed) rolled = await rolloverRecurring(t);
-    const r = await pushOrQueue({ op: 'put', todo: t, baseEtag: t.etag || null }, async (client) => {
-      const r2 = await client.putTodoResilient(store.data.calendarHref, t, t.etag || null);
-      return Object.assign({}, t, { href: r2.href, etag: r2.etag });
-    });
-    return Object.assign({}, r, { rolled });
+    const r = await push(t);
+    for (const p of cascaded) await push(p);
+    broadcast();
+    return Object.assign({}, r, { rolled, cascaded: cascaded.map((p) => p.title || '(无标题)') });
   });
 
   /** 「加入 / 移出今天」——列表里点一下就生效，不用开编辑区 */

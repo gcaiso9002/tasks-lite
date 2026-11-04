@@ -256,6 +256,20 @@ function repeatLabel(rrule) {
   return '循环';
 }
 
+// 侧边栏用的线性图标，统一 16px、currentColor，跟文字一起变色
+const NAV_ICONS = {
+  sun: '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>',
+  grid: '<svg viewBox="0 0 24 24"><rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/><rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/></svg>',
+  calendar: '<svg viewBox="0 0 24 24"><rect x="3.5" y="5" width="17" height="15.5" rx="3"/><path d="M3.5 10h17M8 3v4M16 3v4"/></svg>',
+  folder: '<svg viewBox="0 0 24 24"><path d="M3 7.5A2.5 2.5 0 0 1 5.5 5h3.7l2 2h7.3A2.5 2.5 0 0 1 21 9.5v7A2.5 2.5 0 0 1 18.5 19h-13A2.5 2.5 0 0 1 3 16.5z"/></svg>',
+  hash: '<svg viewBox="0 0 24 24"><path d="M10 3 8 21M16 3l-2 18M4 8.5h16M3 15.5h16"/></svg>',
+  trash: '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4.5h6V7M6.5 7l.9 12.1A2 2 0 0 0 9.4 21h5.2a2 2 0 0 0 2-1.9L17.5 7M10 11v6M14 11v6"/></svg>',
+};
+
+function navIcon(name) {
+  return `<span class="nav-ico" aria-hidden="true">${NAV_ICONS[name] || ''}</span>`;
+}
+
 function buildRow(t, byUid, extraClass, depthOverride) {
   // 列表视图由 groupByHierarchy 算好深度再传进来（保证父任务就在上一行）；
   // 四象限等其它视图没有分组上下文，退回按 parentUid 自己算。
@@ -279,13 +293,13 @@ function buildRow(t, byUid, extraClass, depthOverride) {
   if (t.due) {
     const cls = t.completed ? 'due' : t.due < today ? 'overdue' : t.due === today ? 'today' : 'due';
     const label = t.due === today ? '今天' : t.due;
-    badges.push(`<span class="badge ${cls}">📅 ${label}</span>`);
+    badges.push(`<span class="badge ${cls}">${label}</span>`);
   }
-  if (t.rrule) badges.push(`<span class="badge repeat">🔁 ${repeatLabel(t.rrule)}</span>`);
-  if (t.remindAt) badges.push(`<span class="badge remind">⏰ ${t.remindAt.replace('T', ' ')}</span>`);
+  if (t.rrule) badges.push(`<span class="badge repeat">${repeatLabel(t.rrule)}重复</span>`);
+  if (t.remindAt) badges.push(`<span class="badge remind">提醒 ${t.remindAt.replace('T', ' ')}</span>`);
   for (const tag of t.tags || []) badges.push(`<span class="badge tag">#${escapeHtml(tag)}</span>`);
   if ((t.steps || []).length) {
-    badges.push(`<span class="badge step">☑ ${stepsDone(t)}/${t.steps.length}</span>`);
+    badges.push(`<span class="badge step">${stepsDone(t)}/${t.steps.length} 步</span>`);
   }
   if (t.notes) badges.push('<span class="badge note">有备注</span>');
   // dirty = 本地改了还没被服务器确认。标出来，用户才知道"加了到底上去了没有"
@@ -406,15 +420,19 @@ function renderQuadrant(list, byUid) {
     head.querySelector('.quad-hint').textContent = q.hint;
     head.querySelector('.pill').textContent = String(q.items.length);
     box.appendChild(head);
+    // 每个象限各自滚动，任务多的时候不会把相邻格子一起撑高
+    const body = document.createElement('div');
+    body.className = 'quad-body';
+    box.appendChild(body);
     if (!q.items.length) {
       const empty = document.createElement('div');
       empty.className = 'quad-empty';
       empty.textContent = '空';
-      box.appendChild(empty);
+      body.appendChild(empty);
     }
     // 四象限按「重要×紧急」把任务拆进四个格子，父子本来就可能被分到不同组，
     // 缩进在这里没有意义（甚至会误导），所以显式钉死 depth=0
-    for (const t of q.items) box.appendChild(buildRow(t, byUid, 'flat', 0));
+    for (const t of q.items) body.appendChild(buildRow(t, byUid, 'flat', 0));
     list.appendChild(box);
   });
   renderSidebar();
@@ -566,24 +584,24 @@ function renderSidebar() {
   // 专注视图：置顶三个入口
   const nav = $('listNav');
   nav.innerHTML = '';
-  const mkNav = (label, active, count, onClick) => {
+  const mkNav = (label, icon, active, count, onClick) => {
     const b = document.createElement('button');
     b.className = 'side-item' + (active ? ' active' : '');
-    b.innerHTML = `<span class="side-label"></span><span class="pill"></span>`;
+    b.innerHTML = `${navIcon(icon)}<span class="side-label"></span><span class="pill"></span>`;
     b.querySelector('.side-label').textContent = label;
     b.querySelector('.pill').textContent = count > 0 ? String(count) : '';
     b.addEventListener('click', onClick);
     nav.appendChild(b);
   };
   const myDayCount = state.tasks.filter((t) => !t.completed && t.myDay).length;
-  mkNav('☀ 今天', view === 'myday', myDayCount, () => switchView('myday'));
-  mkNav('◧ 四象限', view === 'quadrant', 0, () => switchView('quadrant'));
-  mkNav('▦ 日历', view === 'calendar', 0, () => switchView('calendar'));
+  mkNav('今天', 'sun', view === 'myday', myDayCount, () => switchView('myday'));
+  mkNav('四象限', 'grid', view === 'quadrant', 0, () => switchView('quadrant'));
+  mkNav('日历', 'calendar', view === 'calendar', 0, () => switchView('calendar'));
 
-  const mk = (host, label, active, count, onClick) => {
+  const mk = (host, label, icon, active, count, onClick) => {
     const b = document.createElement('button');
     b.className = 'side-item' + (active ? ' active' : '');
-    b.innerHTML = `<span class="side-label"></span><span class="pill"></span>`;
+    b.innerHTML = `${navIcon(icon)}<span class="side-label"></span><span class="pill"></span>`;
     b.querySelector('.side-label').textContent = label;
     b.querySelector('.pill').textContent = count > 0 ? String(count) : '';
     b.addEventListener('click', onClick);
@@ -593,7 +611,7 @@ function renderSidebar() {
   const listBox = $('listBox');
   listBox.innerHTML = '';
   for (const l of state.lists || []) {
-    mk(listBox, l.name, listFilter === l.name, l.count, () => {
+    mk(listBox, l.name, 'folder', listFilter === l.name, l.count, () => {
       listFilter = listFilter === l.name ? '' : l.name;
       switchView('tasks');
     });
@@ -608,7 +626,7 @@ function renderSidebar() {
   const tagNav = $('tagNav');
   tagNav.innerHTML = '';
   for (const t of state.tags || []) {
-    mk(tagNav, `#${t.name}`, tagFilter === t.name, t.count, () => {
+    mk(tagNav, t.name, 'hash', tagFilter === t.name, t.count, () => {
       tagFilter = tagFilter === t.name ? '' : t.name;
       render();
     });
@@ -842,7 +860,13 @@ $('list').addEventListener('click', (e) => {
       if (!confirm(`还有 ${left} 个步骤没完成，确定标记整条任务完成？`)) return;
     }
     window.api.toggleTask(uid, willComplete).then((r) => {
-      if (r && r.rolled) toast(`已生成下一期：${r.rolled.due}`);
+      const bits = [];
+      if (r && r.rolled) bits.push(`已生成下一期：${r.rolled.due}`);
+      // 子任务全部完成时父任务会跟着完成（反向重新打开也一样），给个回执
+      if (r && r.cascaded && r.cascaded.length) {
+        bits.push(`上级任务已同步${willComplete ? '完成' : '重新打开'} ${r.cascaded.length} 个`);
+      }
+      if (bits.length) toast(bits.join(' · '));
     });
     e.stopPropagation();
     return;
