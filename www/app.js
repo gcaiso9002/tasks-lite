@@ -642,6 +642,7 @@ function renderSidebar() {
 }
 
 function switchView(next) {
+  document.body.classList.remove('nav-open');
   view = view === next && next !== 'tasks' ? 'tasks' : next;
   if (view === 'calendar') calCursor = new Date();
   if (view !== 'tasks') $('empty').querySelector('.empty-text').textContent = '这里没有任务';
@@ -1162,6 +1163,11 @@ $('cfgAccentReset').addEventListener('click', () => {
 });
 
 $('btnSettings').addEventListener('click', openSettings);
+
+// 手机端：侧栏收进抽屉，点菜单按钮展开
+$('btnMenu').addEventListener('click', () => document.body.classList.toggle('nav-open'));
+$('sideBackdrop').addEventListener('click', () => document.body.classList.remove('nav-open'));
+
 $('setClose').addEventListener('click', () => { $('settings').hidden = true; });
 $('settings').addEventListener('click', (e) => { if (e.target.id === 'settings') $('settings').hidden = true; });
 

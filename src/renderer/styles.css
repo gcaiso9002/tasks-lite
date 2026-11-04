@@ -257,6 +257,10 @@ button, input, select, textarea { font-family: inherit; }
   color: var(--accent); transform: translateY(-1px);
 }
 .icon-btn:active { transform: translateY(0); }
+.icon-btn svg {
+  width: 18px; height: 18px; fill: none; stroke: currentColor;
+  stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round;
+}
 .icon-btn.spin { animation: spin .8s linear infinite; }
 @keyframes spin { to { transform: rotate(360deg); } }
 
@@ -769,3 +773,81 @@ button, input, select, textarea { font-family: inherit; }
   animation: rise .2s cubic-bezier(.2, .8, .3, 1);
 }
 .toast.err { border-color: var(--danger); color: var(--danger); }
+
+/* ---------------- 窄屏 / 手机 ---------------- */
+.menu-btn,
+.side-backdrop { display: none; }
+
+@media (max-width: 760px) {
+  .menu-btn { display: inline-flex; align-items: center; justify-content: center; }
+
+  .topbar { height: 56px; padding: 0 10px; gap: 10px; }
+  .topbar .search { display: none; }
+  .brand { font-size: 14px; }
+  .topbar-right { gap: 4px; }
+
+  .sidebar {
+    position: fixed; top: 0; bottom: 0; left: 0; width: 268px; z-index: 70;
+    transform: translateX(-102%); transition: transform .18s ease;
+    padding-top: calc(16px + env(safe-area-inset-top));
+    padding-bottom: calc(14px + env(safe-area-inset-bottom));
+    border-right: 1px solid var(--line);
+    box-shadow: 20px 0 46px rgba(0, 0, 0, .42);
+  }
+  body.nav-open .sidebar { transform: none; }
+
+  .side-backdrop {
+    display: block; position: fixed; inset: 0; z-index: 65;
+    background: rgba(0, 0, 0, .5); opacity: 0; pointer-events: none;
+    transition: opacity .18s ease;
+  }
+  body.nav-open .side-backdrop { opacity: 1; pointer-events: auto; }
+
+  .composer, .quick-preview, .filters, .view-head, .list, .calendar {
+    width: min(100% - 24px, 1120px);
+  }
+  .composer { margin: 12px 12px 0; padding: 8px 8px 8px 12px; flex-wrap: wrap; gap: 8px; }
+  .composer .new-title { flex: 1 1 100%; }
+  .list { padding: 10px 12px 96px; }
+
+  .item { gap: 10px; padding: 9px 8px; }
+  .item .item-main { min-width: 0; }
+
+  /* 筛选条改成横向滑动，不再被裁掉 */
+  .filters { margin: 10px 12px 0; overflow-x: auto; scrollbar-width: none; }
+  .filters::-webkit-scrollbar { display: none; }
+  .filters .filter { flex: none; white-space: nowrap; }
+
+  .view-head { margin: 10px 12px 0; padding: 6px 8px; gap: 6px; flex-wrap: wrap; }
+  .view-title { min-width: 0; flex: 1; font-size: 13px; text-align: left; }
+  #viewCount { display: none; }
+
+  /* 日历：7 列压进屏宽 */
+  .calendar { padding: 10px 12px calc(24px + env(safe-area-inset-bottom)); }
+  .cal-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; }
+  .cal-head { font-size: 10px; padding: 2px 0 4px; }
+  .cal-cell { min-height: 66px; padding: 4px; border-radius: 8px; }
+  .cal-num { font-size: 10.5px; margin-bottom: 3px; }
+  .cal-chip { font-size: 9px; padding: 1px 4px; }
+  .cal-week { grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 6px; }
+  .cal-col { padding: 6px; min-height: 0; }
+
+  /* 设置弹窗：手机上变成底部面板，不再固定 560px 宽度 */
+  .modal { padding: 10px; align-items: flex-end; }
+  .modal-card {
+    width: 100%; max-width: 100%; max-height: 86vh; border-radius: 18px;
+    padding: 18px; background: var(--bg-2);
+  }
+  .modal-head { margin-bottom: 14px; }
+  .modal-head h2 { font-size: 17px; }
+  .modal-foot {
+    margin: 18px -18px -18px; padding: 12px 18px calc(14px + env(safe-area-inset-bottom));
+    bottom: -18px; flex-wrap: wrap;
+  }
+  .modal-foot .test-result { flex: 1 1 100%; }
+
+  /* 四象限：空白象限不再留大片空白，长列表随页面滚动 */
+  .main.quad-mode .list { padding-bottom: 24px; }
+  .quad { min-height: 0; overflow: visible; padding: 12px; }
+  .quad-body { overflow: visible; }
+}

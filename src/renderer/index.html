@@ -8,6 +8,9 @@
 </head>
 <body>
   <header class="topbar">
+    <button id="btnMenu" class="icon-btn menu-btn" title="菜单" aria-label="菜单">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/></svg>
+    </button>
     <div class="brand">Tasks&nbsp;Lite<span id="appVer" class="ver"></span></div>
     <input id="search" class="search" type="search" placeholder="搜索任务…  (Ctrl+F)" />
     <div class="topbar-right">
@@ -39,6 +42,7 @@
         <button id="btnTrashEmpty" class="side-mini" hidden>清空回收站</button>
       </div>
     </aside>
+    <div id="sideBackdrop" class="side-backdrop"></div>
 
     <div class="main">
       <section class="composer">
